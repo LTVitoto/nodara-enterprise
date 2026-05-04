@@ -1,0 +1,25 @@
+# Secretos y Variables de Entorno (¡CRÍTICO!)
+.env
+.env.*.local
+
+# Dependencias y Builds del Frontend (Node/Next.js)
+node_modules/
+.next/
+out/
+npm-debug.log*
+
+# Dependencias y Caché del Backend (Python/FastAPI)
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+env/
+
+# Volúmenes de Base de Datos y Archivos Locales
+postgres_data/
+postgres_data_local/
+
+# Configuraciones de Editores de Código y SO
+.vscode/
+.idea/
+.DS_Store

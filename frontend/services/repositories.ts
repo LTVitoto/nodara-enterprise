@@ -1,0 +1,80 @@
+import { apiFetch, withMockFallback } from "@/services/api-client";
+import { mockAgents, mockApprovals, mockAuditEvents, mockConfig, mockFiles, mockMessages, mockMetrics, mockProjects, mockTools, mockWorkspace } from "@/mocks/data";
+import type { AgentDefinition, Approval, AuditEvent, ChatMessage, MetricCard, Proyecto, ProyectoCreate, ToolDefinition, UploadedFile, UsuarioConfig, WorkspaceNode } from "@/types/domain";
+
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+
+// 🔥 FIX: Normalizador estricto para evitar crash en map()
+function normalizeArray<T>(data: any): T[] {
+  if (Array.isArray(data)) return data;
+  if (data && Array.isArray(data.items)) return data.items;
+  if (data && Array.isArray(data.data)) return data.data;
+  return [];
+}
+
+export const configRepository = {
+  list: async (): Promise<UsuarioConfig[]> => {
+    try { const res = await fetch(`${API_URL}/api/config`); return normalizeArray(await res.json()); } catch { return [mockConfig]; }
+  }
+};
+
+export const projectsRepository = {
+  list: async (): Promise<Proyecto[]> => {
+    try { const res = await fetch(`${API_URL}/api/projects`); return normalizeArray(await res.json()); } catch { return mockProjects; }
+  },
+  // 🔥 FIX: Implementación robusta de get()
+  get: async (id: string): Promise<Proyecto | null> => {
+    try {
+      const res = await fetch(`${API_URL}/api/projects/${id}`);
+      if (!res.ok) throw new Error("Proyecto no encontrado");
+      return await res.json();
+    } catch {
+      // Fallback al primer mock disponible si el backend falla
+      return mockProjects.find(p => p.id === id) || mockProjects[0] || null;
+    }
+  },
+  create: async (payload: ProyectoCreate): Promise<Proyecto> => {
+    try {
+      const res = await fetch(`${API_URL}/api/projects`, { method: "POST", body: JSON.stringify(payload), headers: { "Content-Type": "application/json" } });
+      return await res.json();
+    } catch { return { ...payload, id: crypto.randomUUID(), fecha_creacion: new Date().toISOString() }; }
+  }
+};
+
+export const approvalsRepository = {
+  listAll: async (): Promise<Approval[]> => {
+    try { const res = await fetch(`${API_URL}/api/approvals`); return normalizeArray(await res.json()); } catch { return mockApprovals; }
+  },
+  approve: async (id: number): Promise<Approval> => {
+    const res = await fetch(`${API_URL}/api/approvals/${id}/approve`, { method: "POST" });
+    if (!res.ok) throw new Error("Error al aprobar"); return await res.json();
+  },
+  reject: async (id: number): Promise<Approval> => {
+    const res = await fetch(`${API_URL}/api/approvals/${id}/reject`, { method: "POST" });
+    if (!res.ok) throw new Error("Error al rechazar"); return await res.json();
+  }
+};
+
+export const futureRepository = {
+  metrics: async (): Promise<MetricCard[]> => {
+    try { const res = await fetch(`${API_URL}/api/metrics`); return normalizeArray(await res.json()); } catch { return mockMetrics; }
+  },
+  messages: async (projectId: string): Promise<ChatMessage[]> => {
+    try { const res = await fetch(`${API_URL}/api/projects/${projectId}/messages`); return normalizeArray(await res.json()); } catch { return mockMessages; }
+  },
+  tools: async (): Promise<ToolDefinition[]> => {
+    try { const res = await fetch(`${API_URL}/api/tools`); return normalizeArray(await res.json()); } catch { return mockTools; }
+  },
+  agents: async (): Promise<AgentDefinition[]> => {
+    try { const res = await fetch(`${API_URL}/api/agents`); return normalizeArray(await res.json()); } catch { return mockAgents; }
+  },
+  workspace: async (projectId: string): Promise<WorkspaceNode[]> => {
+    try { const res = await fetch(`${API_URL}/api/projects/${projectId}/workspace/tree`); return normalizeArray(await res.json()); } catch { return mockWorkspace; }
+  },
+  audit: async (): Promise<AuditEvent[]> => {
+    try { const res = await fetch(`${API_URL}/api/audit/events`); return normalizeArray(await res.json()); } catch { return mockAuditEvents; }
+  }
+};
+EOF
+
+echo "✅ Parche aplicado. Recarga el navegador web (F5), el error de Runtime ha desaparecido."

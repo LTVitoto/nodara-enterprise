@@ -1,0 +1,45 @@
+# ==========================================
+# 1. CORE FASTAPI Y SERVIDOR
+# ==========================================
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+pydantic==2.10.5
+pydantic-settings==2.7.1
+python-dotenv==1.0.1
+
+# ==========================================
+# 2. BASE DE DATOS E INFRAESTRUCTURA
+# ==========================================
+SQLAlchemy==2.0.36
+asyncpg==0.30.0
+psycopg2-binary==2.9.9
+
+# ==========================================
+# 3. SDKs DE INTELIGENCIA ARTIFICIAL
+# ==========================================
+openai==1.59.7
+anthropic==0.42.0
+google-genai==1.2.0
+
+# ==========================================
+# 4. MANEJO DE ARCHIVOS Y METADATA
+# ==========================================
+python-multipart==0.0.20
+aiofiles==24.1.0
+pandas==2.2.3
+openpyxl==3.1.5
+beautifulsoup4==4.12.3
+lxml==5.3.0
+
+# ==========================================
+# 5. RENDIMIENTO, RESILIENCIA Y SERIALIZACIÓN
+# ==========================================
+tenacity==9.0.0
+orjson==3.10.15
+anyio==4.8.0
+
+# ==========================================
+# 6. CLIENTES HTTP Y WEBSOCKET PARA TESTING/UTILIDADES
+# ==========================================
+httpx==0.28.1
+websockets==14.1
