@@ -3,7 +3,6 @@ from datetime import datetime
 
 from app.models.history_models import MensajeHistorial
 
-
 class MessageService:
 
     async def log(
@@ -24,12 +23,16 @@ class MessageService:
         tool_name=None,
         tool_status=None,
     ):
+        # 🔥 FIX: Mapear 'agente' y 'role' a 'remitente' y 'destinatario'
+        remitente = agente if role == "assistant" else "Usuario"
+        destinatario = "Usuario" if role == "assistant" else "Orquestador"
+
         msg = MensajeHistorial(
             proyecto_id=proyecto_id,
             ejecucion_id=ejecucion_id,
-            agente=agente,
-            role=role,
-            content=content,
+            remitente=remitente,
+            destinatario=destinatario,
+            contenido=content,
             model=model,
             tokens_input=tokens_input,
             tokens_output=tokens_output,
@@ -38,7 +41,7 @@ class MessageService:
             correlation_id=correlation_id,
             tool_name=tool_name,
             tool_status=tool_status,
-            created_at=datetime.utcnow(),
+            fecha_envio=datetime.utcnow(),
         )
 
         db.add(msg)

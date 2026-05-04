@@ -1,3 +1,14 @@
+import os
+
+print("🔥 BLINDANDO ENDPOINT DE CONFIGURACIÓN Y VALIDACIÓN DE API KEYS...")
+
+def write_file(path, content):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(content.strip() + "\n")
+    print(f"✅ Archivo corregido: {path}")
+
+write_file("backend/app/routers/config.py", r"""
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,7 +26,7 @@ class ConfigUpdate(BaseModel):
     auto_aprobar_ejecucion: Optional[bool] = None
 
 # 🔥 FIX 2: Detector de placeholders en el .env
-def _is_real_key(key: Optional[str]) -> bool:
+def _is_real_key(key: str) -> bool:
     if not key:
         return False
     # Si la llave contiene el texto placeholder, la marcamos como "No cargada"
@@ -88,3 +99,6 @@ async def update_config(config_id: int, payload: ConfigUpdate, db: AsyncSession 
     await db.refresh(config_obj)
     
     return _format_config(config_obj)
+""")
+
+print("🚀 SCRIPT FINALIZADO. REINICIA EL CONTENEDOR BACKEND.")

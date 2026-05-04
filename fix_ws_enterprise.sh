@@ -1,3 +1,51 @@
+#!/bin/bash
+set -e
+
+echo "🏗️ RESTAURANDO ARQUITECTURA ENTERPRISE PARA WEBSOCKETS..."
+
+# ==========================================
+# 1. ROUTER DEDICADO (El código que validaste)
+# ==========================================
+cat << 'EOF' > backend/app/routers/websocket_chat.py
+from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
+from uuid import UUID
+import logging
+from app.services.orchestrator import run_orchestrator
+
+logger = logging.getLogger("websocket")
+router = APIRouter()
+
+@router.websocket("/ws/chat/{proyecto_id}")
+async def websocket_chat(
+    websocket: WebSocket,
+    proyecto_id: UUID,
+    usuario_config_id: int = Query(default=1),
+):
+    await websocket.accept()
+    logger.info(f"WS Handshake aceptado | Proyecto: {proyecto_id}")
+    try:
+        while True:
+            payload = await websocket.receive_json()
+            message = payload.get("message") or payload.get("content")
+            correlation_id = payload.get("correlation_id", "req-000")
+
+            if not message:
+                await websocket.send_json({"event": "error", "data": {"message": "Payload inválido"}})
+                continue
+
+            # Delegamos al Orquestador Funcional inyectando los parámetros validados
+            await run_orchestrator(websocket, str(proyecto_id), usuario_config_id, payload)
+            
+    except WebSocketDisconnect:
+        logger.info(f"WS Desconectado | Proyecto: {proyecto_id}")
+    except Exception as e:
+        logger.error(f"Error crítico en capa WS: {e}")
+EOF
+
+# ==========================================
+# 2. ORQUESTADOR (Adaptado para recibir los nuevos parámetros)
+# ==========================================
+cat << 'EOF' > backend/app/services/orchestrator.py
 import uuid
 from datetime import datetime
 from app.database import AsyncSessionLocal
@@ -12,23 +60,9 @@ def ws_event(event: str, correlation_id: str, data: dict):
 message_service = MessageService()
 
 async def _execute_pipeline(websocket, project_id: uuid.UUID, usuario_config_id: int, data: dict, db, ejecucion):
-    raw_prompt = data.get("message", "")
+    prompt = data.get("message", "")
+    agents = data.get("agents", ["chatgpt"])
     correlation_id = ejecucion.correlation_id
-
-    # 🔥 FIX: Lógica de enrutamiento basada en el prefijo del mensaje
-    lower_prompt = raw_prompt.lower()
-    if lower_prompt.startswith("gemini:"):
-        agents = ["gemini"]
-        prompt = raw_prompt[7:].strip()
-    elif lower_prompt.startswith("chatgpt:"):
-        agents = ["chatgpt"]
-        prompt = raw_prompt[8:].strip()
-    elif lower_prompt.startswith("claude:"):
-        agents = ["claude"]
-        prompt = raw_prompt[7:].strip()
-    else:
-        agents = data.get("agents", ["chatgpt"])
-        prompt = raw_prompt
 
     await websocket.send_json(ws_event("orchestration_start", correlation_id, {"project_id": str(project_id), "agents": agents}))
 
@@ -44,7 +78,6 @@ async def _execute_pipeline(websocket, project_id: uuid.UUID, usuario_config_id:
 
         while loop_active:
             try:
-                # LLAMADA A LA IA REAL
                 response = await provider.generate(current_prompt)
                 
                 if '"tool_name"' in response: 
@@ -89,6 +122,7 @@ async def run_orchestrator(websocket, proyecto_id: str, usuario_config_id: int, 
     from app.models.history_models import Ejecucion 
     correlation_id = ensure_correlation_id(data.get("correlation_id"))
     
+    # 🛡️ Validación estricta de UUID para prevenir crashes en Postgres
     try:
         p_id = uuid.UUID(proyecto_id)
     except ValueError:
@@ -108,7 +142,7 @@ async def run_orchestrator(websocket, proyecto_id: str, usuario_config_id: int, 
                     agente="user", role="user", content=data.get("message", ""), correlation_id=correlation_id
                 )
             except Exception as sql_err:
-                pass
+                print(f"⚠️ Warning DB: {sql_err}")
             
             result = await _execute_pipeline(websocket, p_id, usuario_config_id, data, db, ejecucion)
             
@@ -119,3 +153,56 @@ async def run_orchestrator(websocket, proyecto_id: str, usuario_config_id: int, 
     except Exception as e:
         await websocket.send_json(ws_event("agent_error", correlation_id, {"agent": "orchestrator", "error": f"Fallo Crítico: {str(e)}"}))
         return {"status": "error"}
+EOF
+
+# ==========================================
+# 3. MAIN.PY (Limpieza total)
+# ==========================================
+cat << 'EOF' > backend/app/main.py
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from contextlib import asynccontextmanager
+import logging
+
+from app.database import init_db
+from app.routers import projects, approvals, config, health, audit, metrics, tools, agents, websocket_chat
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(name)s | %(message)s")
+logger = logging.getLogger("orchestrator")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    logger.info("Inicializando Base de Datos Enterprise...")
+    try:
+        await init_db()
+        logger.info("Base de datos sincronizada.")
+    except Exception as e:
+        logger.error(f"Error inicializando BD: {e}")
+    yield
+    logger.info("Shutdown completado.")
+
+app = FastAPI(title="NODARA Enterprise", version="2.0.0", lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# 🔥 MONTAMOS TODOS LOS ROUTERS
+app.include_router(health.router, tags=["Health"])
+app.include_router(projects.router, prefix="/api/projects", tags=["Projects"])
+app.include_router(approvals.router, prefix="/api/approvals", tags=["Approvals"])
+app.include_router(config.router, prefix="/api/config", tags=["Config"])
+app.include_router(audit.router, prefix="/api/audit", tags=["Audit"])
+app.include_router(metrics.router, prefix="/api/metrics", tags=["Metrics"])
+app.include_router(tools.router, prefix="/api/tools", tags=["Tools"])
+app.include_router(agents.router, prefix="/api/agents", tags=["Agents"])
+
+# 🔥 EL ROUTER DEDICADO DE WEBSOCKETS
+app.include_router(websocket_chat.router, tags=["Websockets"])
+EOF
+
+echo "✅ ARQUITECTURA LIMPIA. Reiniciando backend..."

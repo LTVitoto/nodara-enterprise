@@ -1,3 +1,9 @@
+#!/bin/bash
+set -e
+
+echo "🔥 BLINDANDO ENDPOINT DE CONFIGURACIÓN Y VALIDACIÓN DE API KEYS..."
+
+cat << 'EOF' > backend/app/routers/config.py
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -88,3 +94,6 @@ async def update_config(config_id: int, payload: ConfigUpdate, db: AsyncSession 
     await db.refresh(config_obj)
     
     return _format_config(config_obj)
+EOF
+
+echo "✅ ARCHIVO REESCRITO EXITOSAMENTE."

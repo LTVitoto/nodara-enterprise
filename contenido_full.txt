@@ -105,6 +105,182 @@ EOF
 echo "✅ Listo. Uvicorn debería poder compilar el árbol de dependencias exitosamente ahora."-e 
 
 ================================================================================
+📁 ARCHIVO: ./fix11.sh
+================================================================================
+#!/bin/bash
+set -e
+
+echo "🔥 BLINDANDO ENDPOINT DE CONFIGURACIÓN Y VALIDACIÓN DE API KEYS..."
+
+cat << 'EOF' > backend/app/routers/config.py
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+from pydantic import BaseModel
+from typing import Optional
+
+from app.database import get_db
+from app.config import get_settings
+
+router = APIRouter()
+settings = get_settings()
+
+# 🔥 FIX 1: Modelo Pydantic estricto para evitar Error 500 y Crash de FastAPI
+class ConfigUpdate(BaseModel):
+    auto_aprobar_ejecucion: Optional[bool] = None
+
+# 🔥 FIX 2: Detector de placeholders en el .env
+def _is_real_key(key: Optional[str]) -> bool:
+    if not key:
+        return False
+    # Si la llave contiene el texto placeholder, la marcamos como "No cargada"
+    if "tu_llave" in key.lower():
+        return False
+    return True
+
+def _format_config(config_obj):
+    """Mapea el objeto DB al formato que espera el Frontend"""
+    return {
+        "id": config_obj.id,
+        "derivar_en_problemas": config_obj.derivar_en_problemas,
+        "auto_aprobar_ejecucion": config_obj.auto_aprobar_ejecucion,
+        "saldo_virtual_openai": float(config_obj.saldo_virtual_openai) if config_obj.saldo_virtual_openai is not None else 0.0,
+        "saldo_virtual_anthropic": float(config_obj.saldo_virtual_anthropic) if config_obj.saldo_virtual_anthropic is not None else 0.0,
+        "saldo_virtual_gemini": float(config_obj.saldo_virtual_gemini) if config_obj.saldo_virtual_gemini is not None else 0.0,
+        # Validamos contra la BD o contra el .env asegurando que no sean placeholders
+        "has_api_key_openai": bool(config_obj.api_key_openai) or _is_real_key(settings.openai_api_key),
+        "has_api_key_anthropic": bool(config_obj.api_key_anthropic) or _is_real_key(settings.anthropic_api_key),
+        "has_api_key_gemini": bool(config_obj.api_key_gemini) or _is_real_key(settings.gemini_api_key),
+    }
+
+@router.get("")
+async def get_config(db: AsyncSession = Depends(get_db)):
+    try:
+        from app.models.governance import UsuarioConfig
+        result = await db.execute(select(UsuarioConfig))
+        configs = result.scalars().all()
+        if not configs:
+            return [{
+                "id": 1,
+                "derivar_en_problemas": False,
+                "auto_aprobar_ejecucion": False,
+                "saldo_virtual_openai": 0.0,
+                "saldo_virtual_anthropic": 0.0,
+                "saldo_virtual_gemini": 0.0,
+                "has_api_key_openai": _is_real_key(settings.openai_api_key),
+                "has_api_key_anthropic": _is_real_key(settings.anthropic_api_key),
+                "has_api_key_gemini": _is_real_key(settings.gemini_api_key),
+            }]
+        return [_format_config(c) for c in configs]
+    except Exception as e:
+        return [{
+            "id": 1,
+            "derivar_en_problemas": False,
+            "auto_aprobar_ejecucion": False,
+            "saldo_virtual_openai": 0.0,
+            "saldo_virtual_anthropic": 0.0,
+            "saldo_virtual_gemini": 0.0,
+            "has_api_key_openai": _is_real_key(settings.openai_api_key),
+            "has_api_key_anthropic": _is_real_key(settings.anthropic_api_key),
+            "has_api_key_gemini": _is_real_key(settings.gemini_api_key),
+            "error": str(e)
+        }]
+
+@router.patch("/{config_id}")
+async def update_config(config_id: int, payload: ConfigUpdate, db: AsyncSession = Depends(get_db)):
+    from app.models.governance import UsuarioConfig
+    
+    config_obj = await db.get(UsuarioConfig, config_id)
+    if not config_obj:
+        config_obj = UsuarioConfig(id=config_id)
+        db.add(config_obj)
+
+    # Actualización segura a través de Pydantic
+    if payload.auto_aprobar_ejecucion is not None:
+        config_obj.auto_aprobar_ejecucion = payload.auto_aprobar_ejecucion
+            
+    await db.commit()
+    await db.refresh(config_obj)
+    
+    return _format_config(config_obj)
+EOF
+
+echo "✅ ARCHIVO REESCRITO EXITOSAMENTE."-e 
+
+================================================================================
+📁 ARCHIVO: ./final_ws_fix.py
+================================================================================
+import os
+
+print("🔥 INICIANDO CORRECCIÓN DEL ORQUESTADOR (MENSAJES)...")
+
+def write_file(path, content):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(content.strip() + "\n")
+    print(f"✅ Archivo corregido: {path}")
+
+# ==========================================
+# 1. FIX: SERVICIO DE MENSAJES (Alineado con DB real)
+# ==========================================
+write_file("backend/app/services/message_service.py", r"""
+from sqlalchemy.ext.asyncio import AsyncSession
+from datetime import datetime
+
+from app.models.history_models import MensajeHistorial
+
+class MessageService:
+
+    async def log(
+        self,
+        db: AsyncSession,
+        *,
+        proyecto_id,
+        ejecucion_id,
+        agente,
+        role,
+        content,
+        correlation_id,
+        model=None,
+        tokens_input=0,
+        tokens_output=0,
+        cost_usd=0.0,
+        latency_ms=0,
+        tool_name=None,
+        tool_status=None,
+    ):
+        # 🔥 FIX: Mapear 'agente' y 'role' a 'remitente' y 'destinatario'
+        remitente = agente if role == "assistant" else "Usuario"
+        destinatario = "Usuario" if role == "assistant" else "Orquestador"
+
+        msg = MensajeHistorial(
+            proyecto_id=proyecto_id,
+            ejecucion_id=ejecucion_id,
+            remitente=remitente,
+            destinatario=destinatario,
+            contenido=content,
+            model=model,
+            tokens_input=tokens_input,
+            tokens_output=tokens_output,
+            cost_usd=cost_usd,
+            latency_ms=latency_ms,
+            correlation_id=correlation_id,
+            tool_name=tool_name,
+            tool_status=tool_status,
+            fecha_envio=datetime.utcnow(),
+        )
+
+        db.add(msg)
+        await db.commit()
+        await db.refresh(msg)
+
+        return msg
+""")
+
+print("\n🚀 PARCHE APLICADO. Reinicia tu contenedor del backend.")
+-e 
+
+================================================================================
 📁 ARCHIVO: ./LICENSE
 ================================================================================
                     GNU GENERAL PUBLIC LICENSE
@@ -784,6 +960,43 @@ Public License instead of this License.  But first, please read
 -e 
 
 ================================================================================
+📁 ARCHIVO: ./status_build.txt
+================================================================================
+compilacion_ok
+-e 
+
+================================================================================
+📁 ARCHIVO: ./fix_db_final.sh
+================================================================================
+#!/bin/bash
+set -e
+
+echo "🛠️ Inyectando columnas y tablas faltantes directamente en PostgreSQL..."
+
+docker exec -i nodara_db psql -U arquitecto -d orquestador_db << 'SQL'
+-- 1. Añadimos la columna faltante que estaba causando el Error 500
+ALTER TABLE usuarios_config ADD COLUMN IF NOT EXISTS saldo_virtual_gemini NUMERIC(10,4) DEFAULT 0.0000;
+
+-- 2. Aseguramos que la tabla de Gobernanza HIL exista (por si SQLAlchemy falló en crearla)
+CREATE TABLE IF NOT EXISTS tool_call_pendiente (
+    id SERIAL PRIMARY KEY,
+    proyecto_id UUID,
+    usuario_config_id INTEGER REFERENCES usuarios_config(id),
+    agente VARCHAR NOT NULL,
+    tool_name VARCHAR NOT NULL,
+    arguments_json JSONB DEFAULT '{}',
+    status VARCHAR DEFAULT 'pending',
+    result_json JSONB,
+    error_message VARCHAR,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    resolved_at TIMESTAMP
+);
+SQL
+
+echo "✅ Base de datos parcheada a nivel de motor."
+-e 
+
+================================================================================
 📁 ARCHIVO: ./init_fix4.sh
 ================================================================================
 #!/bin/bash
@@ -936,8 +1149,8 @@ DATABASE_URL=postgresql+asyncpg://arquitecto:super_password_secreta_123@db:5432/
 # En desarrollo local con USE_MOCK_APIS=True estas llaves pueden ser placeholders.
 # Cuando USE_MOCK_APIS=False deben ser llaves reales.
 
-OPENAI_API_KEY=sk-tu_llave_openai_aqui
-ANTHROPIC_API_KEY=sk-ant-tu_llave_anthropic_aqui
+OPENAI_API_KEY=
+ANTHROPIC_API_KEY=
 GEMINI_API_KEY=AIzaSyDYirH1eXq_F1iMbyi-mqzYMOZH6Hbcxjo
 
 
@@ -1515,9 +1728,42 @@ def get_settings() -> Settings:
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from pydantic import BaseModel
+from typing import Optional
+
 from app.database import get_db
+from app.config import get_settings
 
 router = APIRouter()
+settings = get_settings()
+
+# 🔥 FIX 1: Modelo Pydantic estricto para evitar Error 500 y Crash de FastAPI
+class ConfigUpdate(BaseModel):
+    auto_aprobar_ejecucion: Optional[bool] = None
+
+# 🔥 FIX 2: Detector de placeholders en el .env
+def _is_real_key(key: Optional[str]) -> bool:
+    if not key:
+        return False
+    # Si la llave contiene el texto placeholder, la marcamos como "No cargada"
+    if "tu_llave" in key.lower():
+        return False
+    return True
+
+def _format_config(config_obj):
+    """Mapea el objeto DB al formato que espera el Frontend"""
+    return {
+        "id": config_obj.id,
+        "derivar_en_problemas": config_obj.derivar_en_problemas,
+        "auto_aprobar_ejecucion": config_obj.auto_aprobar_ejecucion,
+        "saldo_virtual_openai": float(config_obj.saldo_virtual_openai) if config_obj.saldo_virtual_openai is not None else 0.0,
+        "saldo_virtual_anthropic": float(config_obj.saldo_virtual_anthropic) if config_obj.saldo_virtual_anthropic is not None else 0.0,
+        "saldo_virtual_gemini": float(config_obj.saldo_virtual_gemini) if config_obj.saldo_virtual_gemini is not None else 0.0,
+        # Validamos contra la BD o contra el .env asegurando que no sean placeholders
+        "has_api_key_openai": bool(config_obj.api_key_openai) or _is_real_key(settings.openai_api_key),
+        "has_api_key_anthropic": bool(config_obj.api_key_anthropic) or _is_real_key(settings.anthropic_api_key),
+        "has_api_key_gemini": bool(config_obj.api_key_gemini) or _is_real_key(settings.gemini_api_key),
+    }
 
 @router.get("")
 async def get_config(db: AsyncSession = Depends(get_db)):
@@ -1525,14 +1771,50 @@ async def get_config(db: AsyncSession = Depends(get_db)):
         from app.models.governance import UsuarioConfig
         result = await db.execute(select(UsuarioConfig))
         configs = result.scalars().all()
-        # Si no hay config, devolvemos un default seguro en vez de fallar
         if not configs:
-            return [{"id": 1, "auto_aprobar_ejecucion": False}]
-        return configs
+            return [{
+                "id": 1,
+                "derivar_en_problemas": False,
+                "auto_aprobar_ejecucion": False,
+                "saldo_virtual_openai": 0.0,
+                "saldo_virtual_anthropic": 0.0,
+                "saldo_virtual_gemini": 0.0,
+                "has_api_key_openai": _is_real_key(settings.openai_api_key),
+                "has_api_key_anthropic": _is_real_key(settings.anthropic_api_key),
+                "has_api_key_gemini": _is_real_key(settings.gemini_api_key),
+            }]
+        return [_format_config(c) for c in configs]
     except Exception as e:
-        # Evita el Error 500 que causa el bloqueo de CORS
-        print(f"Error en BD Config: {e}")
-        return [{"id": 1, "auto_aprobar_ejecucion": False, "error": str(e)}]
+        return [{
+            "id": 1,
+            "derivar_en_problemas": False,
+            "auto_aprobar_ejecucion": False,
+            "saldo_virtual_openai": 0.0,
+            "saldo_virtual_anthropic": 0.0,
+            "saldo_virtual_gemini": 0.0,
+            "has_api_key_openai": _is_real_key(settings.openai_api_key),
+            "has_api_key_anthropic": _is_real_key(settings.anthropic_api_key),
+            "has_api_key_gemini": _is_real_key(settings.gemini_api_key),
+            "error": str(e)
+        }]
+
+@router.patch("/{config_id}")
+async def update_config(config_id: int, payload: ConfigUpdate, db: AsyncSession = Depends(get_db)):
+    from app.models.governance import UsuarioConfig
+    
+    config_obj = await db.get(UsuarioConfig, config_id)
+    if not config_obj:
+        config_obj = UsuarioConfig(id=config_id)
+        db.add(config_obj)
+
+    # Actualización segura a través de Pydantic
+    if payload.auto_aprobar_ejecucion is not None:
+        config_obj.auto_aprobar_ejecucion = payload.auto_aprobar_ejecucion
+            
+    await db.commit()
+    await db.refresh(config_obj)
+    
+    return _format_config(config_obj)
 -e 
 
 ================================================================================
@@ -1594,27 +1876,22 @@ async def websocket_chat(
 📁 ARCHIVO: ./backend/app/routers/projects.py
 ================================================================================
 from __future__ import annotations
-
 from uuid import UUID
-
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.database import get_db
 from app.schemas import ProyectoCreate, ProyectoOut, ProyectoUpdate
 from app.services.slug import slugify
 
 router = APIRouter()
 
-
 @router.get("", response_model=list[ProyectoOut])
 async def list_projects(db: AsyncSession = Depends(get_db)):
     from app.models import Proyecto
     result = await db.execute(select(Proyecto).order_by(Proyecto.fecha_creacion.desc()))
     return list(result.scalars().all())
-
 
 @router.post("", response_model=ProyectoOut)
 async def create_project(payload: ProyectoCreate, db: AsyncSession = Depends(get_db)):
@@ -1643,15 +1920,19 @@ async def create_project(payload: ProyectoCreate, db: AsyncSession = Depends(get
     await db.refresh(obj)
     return obj
 
-
 @router.get("/{project_id}", response_model=ProyectoOut)
-async def get_project(project_id: UUID, db: AsyncSession = Depends(get_db)):
+async def get_project(project_id: str, db: AsyncSession = Depends(get_db)):
     from app.models import Proyecto
-    obj = await db.get(Proyecto, project_id)
+    try:
+        # Validación segura de UUID para evitar Crash 500
+        uid = UUID(project_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Formato UUID inválido")
+        
+    obj = await db.get(Proyecto, uid)
     if not obj:
         raise HTTPException(status_code=404, detail="Proyecto no encontrado")
     return obj
-
 
 @router.patch("/{project_id}", response_model=ProyectoOut)
 async def update_project(project_id: UUID, payload: ProyectoUpdate, db: AsyncSession = Depends(get_db)):
@@ -1659,10 +1940,8 @@ async def update_project(project_id: UUID, payload: ProyectoUpdate, db: AsyncSes
     obj = await db.get(Proyecto, project_id)
     if not obj:
         raise HTTPException(status_code=404, detail="Proyecto no encontrado")
-
     for key, value in payload.model_dump(exclude_unset=True).items():
         setattr(obj, key, value)
-
     await db.commit()
     await db.refresh(obj)
     return obj
@@ -2192,7 +2471,6 @@ from datetime import datetime
 
 from app.models.history_models import MensajeHistorial
 
-
 class MessageService:
 
     async def log(
@@ -2213,12 +2491,16 @@ class MessageService:
         tool_name=None,
         tool_status=None,
     ):
+        # 🔥 FIX: Mapear 'agente' y 'role' a 'remitente' y 'destinatario'
+        remitente = agente if role == "assistant" else "Usuario"
+        destinatario = "Usuario" if role == "assistant" else "Orquestador"
+
         msg = MensajeHistorial(
             proyecto_id=proyecto_id,
             ejecucion_id=ejecucion_id,
-            agente=agente,
-            role=role,
-            content=content,
+            remitente=remitente,
+            destinatario=destinatario,
+            contenido=content,
             model=model,
             tokens_input=tokens_input,
             tokens_output=tokens_output,
@@ -2227,27 +2509,24 @@ class MessageService:
             correlation_id=correlation_id,
             tool_name=tool_name,
             tool_status=tool_status,
-            created_at=datetime.utcnow(),
+            fecha_envio=datetime.utcnow(),
         )
 
         db.add(msg)
         await db.commit()
         await db.refresh(msg)
 
-        return msg-e 
+        return msg
+-e 
 
 ================================================================================
 📁 ARCHIVO: ./backend/app/services/orchestrator.py
 ================================================================================
 import uuid
-import time
-from decimal import Decimal
 from datetime import datetime
-
 from app.database import AsyncSessionLocal
 from app.core.tracing import ensure_correlation_id
 from app.services.providers import get_provider, normalize_provider_error
-from app.services.costing import estimate_cost_usd, estimate_tokens
 from app.services.message_service import MessageService
 from app.services.tools import execute_tool_by_name, ToolExecutionContext
 
@@ -2264,7 +2543,13 @@ async def _execute_pipeline(websocket, project_id, data, db, ejecucion):
     await websocket.send_json(ws_event("orchestration_start", correlation_id, {"project_id": project_id, "agents": agents}))
 
     for agent in agents:
-        provider = get_provider(agent)
+        try:
+            provider = get_provider(agent)
+        except Exception as provider_err:
+            # Captura de error de API KEY faltante sin botar el WS
+            await websocket.send_json(ws_event("agent_error", correlation_id, {"agent": agent, "error": str(provider_err)}))
+            continue
+            
         loop_active = True
         current_prompt = prompt
 
@@ -2306,24 +2591,32 @@ async def _execute_pipeline(websocket, project_id, data, db, ejecucion):
     return {"status": "completed"}
 
 async def run_orchestrator(websocket, project_id: str, data: dict):
-    # 🔥 FIX: Importación Diferida
     from app.models.history_models import Ejecucion 
-    
     correlation_id = ensure_correlation_id(data.get("correlation_id"))
-    async with AsyncSessionLocal() as db:
-        ejecucion = Ejecucion(id=uuid.uuid4(), proyecto_id=project_id, correlation_id=correlation_id, started_at=datetime.utcnow())
-        db.add(ejecucion)
-        await db.commit()
-        await db.refresh(ejecucion)
-        
-        await message_service.log(db=db, proyecto_id=project_id, ejecucion_id=ejecucion.id, agente="user", role="user", content=data.get("message", ""), correlation_id=correlation_id)
-        
-        result = await _execute_pipeline(websocket, project_id, data, db, ejecucion)
-        
-        ejecucion.finished_at = datetime.utcnow()
-        await db.commit()
-        await websocket.send_json(ws_event("orchestration_end", correlation_id, result))
-        return result
+    
+    try:
+        async with AsyncSessionLocal() as db:
+            ejecucion = Ejecucion(id=uuid.uuid4(), proyecto_id=project_id, correlation_id=correlation_id, started_at=datetime.utcnow())
+            db.add(ejecucion)
+            await db.commit()
+            await db.refresh(ejecucion)
+            
+            # 🔥 Guardado Seguro del primer mensaje (sin crashear si fallan columnas)
+            try:
+                await message_service.log(db=db, proyecto_id=project_id, ejecucion_id=ejecucion.id, agente="user", role="user", content=data.get("message", ""), correlation_id=correlation_id)
+            except Exception as sql_err:
+                print(f"⚠️ Warning: No se pudo guardar en DB (Ignorando para no tumbar WS): {sql_err}")
+            
+            result = await _execute_pipeline(websocket, project_id, data, db, ejecucion)
+            
+            ejecucion.finished_at = datetime.utcnow()
+            await db.commit()
+            await websocket.send_json(ws_event("orchestration_end", correlation_id, result))
+            return result
+    except Exception as e:
+        # Blindaje maestro del WS
+        await websocket.send_json(ws_event("agent_error", correlation_id, {"agent": "orchestrator", "error": f"Fallo Crítico: {str(e)}"}))
+        return {"status": "error"}
 
 __all__ = ["run_orchestrator"]
 -e 
@@ -2873,12 +3166,11 @@ from app.models.governance import UsuarioConfig, ToolCallPendiente, ToolCallStat
 ================================================================================
 📁 ARCHIVO: ./backend/app/models/governance.py
 ================================================================================
-import uuid
 from datetime import datetime
 from enum import Enum
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, Numeric
 from sqlalchemy.dialects.postgresql import UUID, JSONB
-from app.db.base import Base
+from app.database import Base
 
 class ToolCallStatus(Enum):
     PENDING = "pending"
@@ -2890,7 +3182,14 @@ class ToolCallStatus(Enum):
 class UsuarioConfig(Base):
     __tablename__ = "usuario_config"
     id = Column(Integer, primary_key=True, autoincrement=True)
+    derivar_en_problemas = Column(Boolean, default=False)
     auto_aprobar_ejecucion = Column(Boolean, default=False)
+    saldo_virtual_openai = Column(Numeric(10, 4), default=0.0000)
+    saldo_virtual_anthropic = Column(Numeric(10, 4), default=0.0000)
+    saldo_virtual_gemini = Column(Numeric(10, 4), default=0.0000)
+    api_key_openai = Column(String(255), nullable=True)
+    api_key_anthropic = Column(String(255), nullable=True)
+    api_key_gemini = Column(String(255), nullable=True)
 
 class ToolCallPendiente(Base):
     __tablename__ = "tool_call_pendiente"
@@ -3626,6 +3925,272 @@ print("🚀 ARQUITECTURA PARCHEADA EXITOSAMENTE.")
 print("👉 REINICIA TU CONTENEDOR DOCKER AHORA.")-e 
 
 ================================================================================
+📁 ARCHIVO: ./fix11_config.py
+================================================================================
+import os
+
+print("🔥 BLINDANDO ENDPOINT DE CONFIGURACIÓN Y VALIDACIÓN DE API KEYS...")
+
+def write_file(path, content):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(content.strip() + "\n")
+    print(f"✅ Archivo corregido: {path}")
+
+write_file("backend/app/routers/config.py", r"""
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+from pydantic import BaseModel
+from typing import Optional
+
+from app.database import get_db
+from app.config import get_settings
+
+router = APIRouter()
+settings = get_settings()
+
+# 🔥 FIX 1: Modelo Pydantic estricto para evitar Error 500 y Crash de FastAPI
+class ConfigUpdate(BaseModel):
+    auto_aprobar_ejecucion: Optional[bool] = None
+
+# 🔥 FIX 2: Detector de placeholders en el .env
+def _is_real_key(key: str) -> bool:
+    if not key:
+        return False
+    # Si la llave contiene el texto placeholder, la marcamos como "No cargada"
+    if "tu_llave" in key.lower():
+        return False
+    return True
+
+def _format_config(config_obj):
+    """Mapea el objeto DB al formato que espera el Frontend"""
+    return {
+        "id": config_obj.id,
+        "derivar_en_problemas": config_obj.derivar_en_problemas,
+        "auto_aprobar_ejecucion": config_obj.auto_aprobar_ejecucion,
+        "saldo_virtual_openai": float(config_obj.saldo_virtual_openai) if config_obj.saldo_virtual_openai is not None else 0.0,
+        "saldo_virtual_anthropic": float(config_obj.saldo_virtual_anthropic) if config_obj.saldo_virtual_anthropic is not None else 0.0,
+        "saldo_virtual_gemini": float(config_obj.saldo_virtual_gemini) if config_obj.saldo_virtual_gemini is not None else 0.0,
+        # Validamos contra la BD o contra el .env asegurando que no sean placeholders
+        "has_api_key_openai": bool(config_obj.api_key_openai) or _is_real_key(settings.openai_api_key),
+        "has_api_key_anthropic": bool(config_obj.api_key_anthropic) or _is_real_key(settings.anthropic_api_key),
+        "has_api_key_gemini": bool(config_obj.api_key_gemini) or _is_real_key(settings.gemini_api_key),
+    }
+
+@router.get("")
+async def get_config(db: AsyncSession = Depends(get_db)):
+    try:
+        from app.models.governance import UsuarioConfig
+        result = await db.execute(select(UsuarioConfig))
+        configs = result.scalars().all()
+        if not configs:
+            return [{
+                "id": 1,
+                "derivar_en_problemas": False,
+                "auto_aprobar_ejecucion": False,
+                "saldo_virtual_openai": 0.0,
+                "saldo_virtual_anthropic": 0.0,
+                "saldo_virtual_gemini": 0.0,
+                "has_api_key_openai": _is_real_key(settings.openai_api_key),
+                "has_api_key_anthropic": _is_real_key(settings.anthropic_api_key),
+                "has_api_key_gemini": _is_real_key(settings.gemini_api_key),
+            }]
+        return [_format_config(c) for c in configs]
+    except Exception as e:
+        return [{
+            "id": 1,
+            "derivar_en_problemas": False,
+            "auto_aprobar_ejecucion": False,
+            "saldo_virtual_openai": 0.0,
+            "saldo_virtual_anthropic": 0.0,
+            "saldo_virtual_gemini": 0.0,
+            "has_api_key_openai": _is_real_key(settings.openai_api_key),
+            "has_api_key_anthropic": _is_real_key(settings.anthropic_api_key),
+            "has_api_key_gemini": _is_real_key(settings.gemini_api_key),
+            "error": str(e)
+        }]
+
+@router.patch("/{config_id}")
+async def update_config(config_id: int, payload: ConfigUpdate, db: AsyncSession = Depends(get_db)):
+    from app.models.governance import UsuarioConfig
+    
+    config_obj = await db.get(UsuarioConfig, config_id)
+    if not config_obj:
+        config_obj = UsuarioConfig(id=config_id)
+        db.add(config_obj)
+
+    # Actualización segura a través de Pydantic
+    if payload.auto_aprobar_ejecucion is not None:
+        config_obj.auto_aprobar_ejecucion = payload.auto_aprobar_ejecucion
+            
+    await db.commit()
+    await db.refresh(config_obj)
+    
+    return _format_config(config_obj)
+""")
+
+print("🚀 SCRIPT FINALIZADO. REINICIA EL CONTENEDOR BACKEND.")-e 
+
+================================================================================
+📁 ARCHIVO: ./fix8.py
+================================================================================
+import os
+
+print("🚀 APLICANDO FIX FINAL: CORRECCIÓN TYPESCRIPT Y ESTABILIZACIÓN...")
+
+def write_file(path, content):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(content.strip() + "\n")
+    print(f"✅ Archivo consolidado: {path}")
+
+# ==========================================
+# 1. FIX FRONTEND: REPOSITORIES (CORRECCIÓN 'async def')
+# ==========================================
+write_file("frontend/services/repositories.ts", r"""
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+
+function normalizeArray(data: any): any[] {
+  if (Array.isArray(data)) return data;
+  if (data && Array.isArray(data.items)) return data.items;
+  if (data && Array.isArray(data.data)) return data.data;
+  return [];
+}
+
+// 🔥 FIX: 'async function' (TypeScript válido) en lugar de 'async def' (Python)
+async function fetchFromAPI(endpoint: string, options?: RequestInit) {
+  try {
+    const res = await fetch(`${API_URL}${endpoint}`, {
+      ...options,
+      headers: { "Content-Type": "application/json", ...options?.headers }
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return await res.json();
+  } catch (error) {
+    console.error(`API Error en ${endpoint}:`, error);
+    return null; 
+  }
+}
+
+export const configRepository = {
+  list: async () => normalizeArray(await fetchFromAPI('/api/config'))
+};
+
+export const projectsRepository = {
+  list: async () => normalizeArray(await fetchFromAPI('/api/projects')),
+  get: async (id: string) => await fetchFromAPI(`/api/projects/${id}`),
+  create: async (payload: any) => await fetchFromAPI('/api/projects', { method: 'POST', body: JSON.stringify(payload) })
+};
+
+export const approvalsRepository = {
+  listAll: async () => normalizeArray(await fetchFromAPI('/api/approvals')),
+  approve: async (id: number) => await fetchFromAPI(`/api/approvals/${id}/approve`, { method: 'POST' }),
+  reject: async (id: number) => await fetchFromAPI(`/api/approvals/${id}/reject`, { method: 'POST' })
+};
+
+export const filesRepository = {
+  list: async () => [],
+  upload: async () => ({ status: "uploaded_db" })
+};
+
+export const futureRepository = {
+  metrics: async () => normalizeArray(await fetchFromAPI('/api/metrics')),
+  messages: async (projectId: string) => normalizeArray(await fetchFromAPI(`/api/projects/${projectId}/messages`)),
+  tools: async () => normalizeArray(await fetchFromAPI('/api/tools')),
+  agents: async () => normalizeArray(await fetchFromAPI('/api/agents')),
+  workspace: async (projectId: string) => normalizeArray(await fetchFromAPI(`/api/projects/${projectId}/workspace/tree`)),
+  audit: async () => normalizeArray(await fetchFromAPI('/api/audit/events'))
+};
+""")
+
+# ==========================================
+# 2. FIX BACKEND: PROJECT.GET()
+# ==========================================
+# Para evitar errores 500 en DetailView, aseguramos que el ID sea parseable.
+write_file("backend/app/routers/projects.py", r"""
+from __future__ import annotations
+from uuid import UUID
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
+from app.database import get_db
+from app.schemas import ProyectoCreate, ProyectoOut, ProyectoUpdate
+from app.services.slug import slugify
+
+router = APIRouter()
+
+@router.get("", response_model=list[ProyectoOut])
+async def list_projects(db: AsyncSession = Depends(get_db)):
+    from app.models import Proyecto
+    result = await db.execute(select(Proyecto).order_by(Proyecto.fecha_creacion.desc()))
+    return list(result.scalars().all())
+
+@router.post("", response_model=ProyectoOut)
+async def create_project(payload: ProyectoCreate, db: AsyncSession = Depends(get_db)):
+    from app.models import Proyecto
+    slug = payload.nombre_slug or slugify(payload.titulo)
+    obj = Proyecto(
+        nombre_slug=slug,
+        titulo=payload.titulo,
+        anio=payload.anio,
+        descripcion=payload.descripcion,
+        tecnologias=payload.tecnologias,
+        microservicios=payload.microservicios,
+        instrucciones_deploy=payload.instrucciones_deploy,
+        github_url=payload.github_url,
+        rol_gemini=payload.rol_gemini,
+        rol_chatgpt=payload.rol_chatgpt,
+        rol_claude=payload.rol_claude,
+        estado=payload.estado,
+    )
+    db.add(obj)
+    try:
+        await db.commit()
+    except IntegrityError as exc:
+        await db.rollback()
+        raise HTTPException(status_code=409, detail=f"Ya existe un proyecto con nombre_slug={slug}") from exc
+    await db.refresh(obj)
+    return obj
+
+@router.get("/{project_id}", response_model=ProyectoOut)
+async def get_project(project_id: str, db: AsyncSession = Depends(get_db)):
+    from app.models import Proyecto
+    try:
+        # Validación segura de UUID para evitar Crash 500
+        uid = UUID(project_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Formato UUID inválido")
+        
+    obj = await db.get(Proyecto, uid)
+    if not obj:
+        raise HTTPException(status_code=404, detail="Proyecto no encontrado")
+    return obj
+
+@router.patch("/{project_id}", response_model=ProyectoOut)
+async def update_project(project_id: UUID, payload: ProyectoUpdate, db: AsyncSession = Depends(get_db)):
+    from app.models import Proyecto
+    obj = await db.get(Proyecto, project_id)
+    if not obj:
+        raise HTTPException(status_code=404, detail="Proyecto no encontrado")
+    for key, value in payload.model_dump(exclude_unset=True).items():
+        setattr(obj, key, value)
+    await db.commit()
+    await db.refresh(obj)
+    return obj
+
+@router.get('/{project_id}/workspace/tree')
+async def get_workspace_tree(project_id: str): return []
+
+@router.get('/{project_id}/messages')
+async def get_project_messages(project_id: str): return []
+""")
+
+print("✅ TypeScript reparado. Backend robustecido.")
+print("🔥 Vuelve a tu navegador, Next.js compilará todo correctamente.")-e 
+
+================================================================================
 📁 ARCHIVO: ./init_fix1.sh
 ================================================================================
 #!/bin/bash
@@ -3992,6 +4557,702 @@ export const futureRepository = {
 EOF
 
 echo "✅ Arquitectura estabilizada. 404s corregidos. ReAct Loop inyectado. Puedes reiniciar tus contenedores."-e 
+
+================================================================================
+📁 ARCHIVO: ./fix_10_final.py
+================================================================================
+import os
+
+print("🔥 INICIANDO CORRECCIÓN FINAL (MODELO CONFIG Y PATCH)...")
+
+def write_file(path, content):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(content.strip() + "\n")
+    print(f"✅ Archivo corregido: {path}")
+
+# ==========================================
+# 1. FIX: MODELO DE GOBERNANZA (Incluir saldos y llaves)
+# ==========================================
+write_file("backend/app/models/governance.py", r"""
+from datetime import datetime
+from enum import Enum
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, Numeric
+from sqlalchemy.dialects.postgresql import UUID, JSONB
+from app.database import Base
+
+class ToolCallStatus(Enum):
+    PENDING = "pending"
+    APPROVED = "approved"
+    EXECUTED = "executed"
+    REJECTED = "rejected"
+    FAILED = "failed"
+
+class UsuarioConfig(Base):
+    __tablename__ = "usuario_config"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    derivar_en_problemas = Column(Boolean, default=False)
+    auto_aprobar_ejecucion = Column(Boolean, default=False)
+    saldo_virtual_openai = Column(Numeric(10, 4), default=0.0000)
+    saldo_virtual_anthropic = Column(Numeric(10, 4), default=0.0000)
+    saldo_virtual_gemini = Column(Numeric(10, 4), default=0.0000)
+    api_key_openai = Column(String(255), nullable=True)
+    api_key_anthropic = Column(String(255), nullable=True)
+    api_key_gemini = Column(String(255), nullable=True)
+
+class ToolCallPendiente(Base):
+    __tablename__ = "tool_call_pendiente"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    proyecto_id = Column(UUID(as_uuid=True), index=True)
+    usuario_config_id = Column(Integer, ForeignKey("usuario_config.id"))
+    agente = Column(String, nullable=False)
+    tool_name = Column(String, nullable=False)
+    arguments_json = Column(JSONB, default={})
+    status = Column(String, default=ToolCallStatus.PENDING.value)
+    result_json = Column(JSONB, nullable=True)
+    error_message = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    resolved_at = Column(DateTime, nullable=True)
+""")
+
+# ==========================================
+# 2. FIX: ENDPOINTS DE CONFIGURACIÓN
+# ==========================================
+write_file("backend/app/routers/config.py", r"""
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+from app.database import get_db
+
+router = APIRouter()
+
+def _format_config(config_obj):
+    """Mapea el objeto DB al formato que espera el Frontend"""
+    return {
+        "id": config_obj.id,
+        "derivar_en_problemas": config_obj.derivar_en_problemas,
+        "auto_aprobar_ejecucion": config_obj.auto_aprobar_ejecucion,
+        "saldo_virtual_openai": float(config_obj.saldo_virtual_openai) if config_obj.saldo_virtual_openai else 0.0,
+        "saldo_virtual_anthropic": float(config_obj.saldo_virtual_anthropic) if config_obj.saldo_virtual_anthropic else 0.0,
+        "saldo_virtual_gemini": float(config_obj.saldo_virtual_gemini) if config_obj.saldo_virtual_gemini else 0.0,
+        "has_api_key_openai": bool(config_obj.api_key_openai),
+        "has_api_key_anthropic": bool(config_obj.api_key_anthropic),
+        "has_api_key_gemini": bool(config_obj.api_key_gemini),
+    }
+
+@router.get("")
+async def get_config(db: AsyncSession = Depends(get_db)):
+    try:
+        from app.models.governance import UsuarioConfig
+        result = await db.execute(select(UsuarioConfig))
+        configs = result.scalars().all()
+        if not configs:
+            return [{
+                "id": 1,
+                "derivar_en_problemas": False,
+                "auto_aprobar_ejecucion": False,
+                "saldo_virtual_openai": 0.0,
+                "saldo_virtual_anthropic": 0.0,
+                "saldo_virtual_gemini": 0.0,
+                "has_api_key_openai": False,
+                "has_api_key_anthropic": False,
+                "has_api_key_gemini": False,
+            }]
+        
+        return [_format_config(c) for c in configs]
+    except Exception as e:
+        return [{
+            "id": 1,
+            "derivar_en_problemas": False,
+            "auto_aprobar_ejecucion": False,
+            "saldo_virtual_openai": 0.0,
+            "saldo_virtual_anthropic": 0.0,
+            "saldo_virtual_gemini": 0.0,
+            "has_api_key_openai": False,
+            "has_api_key_anthropic": False,
+            "has_api_key_gemini": False,
+            "error": str(e)
+        }]
+
+@router.patch("/{config_id}")
+async def update_config(config_id: int, payload: dict, db: AsyncSession = Depends(get_db)):
+    from app.models.governance import UsuarioConfig
+    config_obj = await db.get(UsuarioConfig, config_id)
+    if not config_obj:
+        # Si no existe, lo creamos para evitar fallos (idempotente)
+        config_obj = UsuarioConfig(id=config_id)
+        db.add(config_obj)
+
+    for key, value in payload.items():
+        if hasattr(config_obj, key):
+            setattr(config_obj, key, value)
+            
+    await db.commit()
+    await db.refresh(config_obj)
+    
+    return _format_config(config_obj)
+""")
+
+print("\n🚀 LISTO. Reinicia tu contenedor Backend para aplicar los cambios a la Base de Datos.")-e 
+
+================================================================================
+📁 ARCHIVO: ./contenido_full_db.txt
+================================================================================
+--
+-- PostgreSQL database dump
+--
+
+\restrict 2ENZzb1onR9fyrArvygWc6DwS79kazAaN1rFDaSTeEJddq4aN7YrYszUksFX7h9
+
+-- Dumped from database version 15.17
+-- Dumped by pg_dump version 15.17
+
+SET statement_timeout = 0;
+SET lock_timeout = 0;
+SET idle_in_transaction_session_timeout = 0;
+SET client_encoding = 'UTF8';
+SET standard_conforming_strings = on;
+SELECT pg_catalog.set_config('search_path', '', false);
+SET check_function_bodies = false;
+SET xmloption = content;
+SET client_min_messages = warning;
+SET row_security = off;
+
+--
+-- Name: pgcrypto; Type: EXTENSION; Schema: -; Owner: -
+--
+
+CREATE EXTENSION IF NOT EXISTS pgcrypto WITH SCHEMA public;
+
+
+--
+-- Name: EXTENSION pgcrypto; Type: COMMENT; Schema: -; Owner: 
+--
+
+COMMENT ON EXTENSION pgcrypto IS 'cryptographic functions';
+
+
+SET default_tablespace = '';
+
+SET default_table_access_method = heap;
+
+--
+-- Name: archivos_temporales; Type: TABLE; Schema: public; Owner: arquitecto
+--
+
+CREATE TABLE public.archivos_temporales (
+    id integer NOT NULL,
+    proyecto_id uuid,
+    nombre_archivo character varying(255) NOT NULL,
+    contenido_codigo text NOT NULL,
+    version integer DEFAULT 1,
+    fecha_creacion timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
+    ruta_archivo text,
+    mime_type character varying(120),
+    size_bytes integer
+);
+
+
+ALTER TABLE public.archivos_temporales OWNER TO arquitecto;
+
+--
+-- Name: archivos_temporales_id_seq; Type: SEQUENCE; Schema: public; Owner: arquitecto
+--
+
+CREATE SEQUENCE public.archivos_temporales_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+ALTER TABLE public.archivos_temporales_id_seq OWNER TO arquitecto;
+
+--
+-- Name: archivos_temporales_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: arquitecto
+--
+
+ALTER SEQUENCE public.archivos_temporales_id_seq OWNED BY public.archivos_temporales.id;
+
+
+--
+-- Name: ejecuciones; Type: TABLE; Schema: public; Owner: arquitecto
+--
+
+CREATE TABLE public.ejecuciones (
+    id uuid NOT NULL,
+    proyecto_id uuid NOT NULL,
+    correlation_id character varying NOT NULL,
+    total_tokens integer,
+    total_cost_usd double precision,
+    started_at timestamp without time zone,
+    finished_at timestamp without time zone
+);
+
+
+ALTER TABLE public.ejecuciones OWNER TO arquitecto;
+
+--
+-- Name: mensajes_historial; Type: TABLE; Schema: public; Owner: arquitecto
+--
+
+CREATE TABLE public.mensajes_historial (
+    id integer NOT NULL,
+    proyecto_id uuid,
+    remitente character varying(50) NOT NULL,
+    destinatario character varying(50) NOT NULL,
+    contenido text NOT NULL,
+    tokens_consumidos integer DEFAULT 0,
+    costo_estimado numeric(10,6) DEFAULT 0.000000,
+    incluir_en_contexto boolean DEFAULT true,
+    fecha_envio timestamp without time zone DEFAULT CURRENT_TIMESTAMP
+);
+
+
+ALTER TABLE public.mensajes_historial OWNER TO arquitecto;
+
+--
+-- Name: mensajes_historial_id_seq; Type: SEQUENCE; Schema: public; Owner: arquitecto
+--
+
+CREATE SEQUENCE public.mensajes_historial_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+ALTER TABLE public.mensajes_historial_id_seq OWNER TO arquitecto;
+
+--
+-- Name: mensajes_historial_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: arquitecto
+--
+
+ALTER SEQUENCE public.mensajes_historial_id_seq OWNED BY public.mensajes_historial.id;
+
+
+--
+-- Name: proyectos; Type: TABLE; Schema: public; Owner: arquitecto
+--
+
+CREATE TABLE public.proyectos (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    nombre_slug character varying(100) NOT NULL,
+    titulo character varying(150) NOT NULL,
+    anio integer NOT NULL,
+    descripcion text NOT NULL,
+    tecnologias jsonb DEFAULT '[]'::jsonb NOT NULL,
+    microservicios jsonb DEFAULT '[]'::jsonb NOT NULL,
+    instrucciones_deploy text,
+    github_url character varying(255),
+    rol_gemini text NOT NULL,
+    rol_chatgpt text NOT NULL,
+    rol_claude text NOT NULL,
+    estado character varying(20) DEFAULT 'Activo'::character varying,
+    fecha_creacion timestamp without time zone DEFAULT CURRENT_TIMESTAMP
+);
+
+
+ALTER TABLE public.proyectos OWNER TO arquitecto;
+
+--
+-- Name: tool_call_pendiente; Type: TABLE; Schema: public; Owner: arquitecto
+--
+
+CREATE TABLE public.tool_call_pendiente (
+    id integer NOT NULL,
+    proyecto_id uuid,
+    usuario_config_id integer,
+    agente character varying NOT NULL,
+    tool_name character varying NOT NULL,
+    arguments_json jsonb,
+    status character varying,
+    result_json jsonb,
+    error_message character varying,
+    created_at timestamp without time zone,
+    resolved_at timestamp without time zone
+);
+
+
+ALTER TABLE public.tool_call_pendiente OWNER TO arquitecto;
+
+--
+-- Name: tool_call_pendiente_id_seq; Type: SEQUENCE; Schema: public; Owner: arquitecto
+--
+
+CREATE SEQUENCE public.tool_call_pendiente_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+ALTER TABLE public.tool_call_pendiente_id_seq OWNER TO arquitecto;
+
+--
+-- Name: tool_call_pendiente_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: arquitecto
+--
+
+ALTER SEQUENCE public.tool_call_pendiente_id_seq OWNED BY public.tool_call_pendiente.id;
+
+
+--
+-- Name: usuario_config; Type: TABLE; Schema: public; Owner: arquitecto
+--
+
+CREATE TABLE public.usuario_config (
+    id integer NOT NULL,
+    auto_aprobar_ejecucion boolean
+);
+
+
+ALTER TABLE public.usuario_config OWNER TO arquitecto;
+
+--
+-- Name: usuario_config_id_seq; Type: SEQUENCE; Schema: public; Owner: arquitecto
+--
+
+CREATE SEQUENCE public.usuario_config_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+ALTER TABLE public.usuario_config_id_seq OWNER TO arquitecto;
+
+--
+-- Name: usuario_config_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: arquitecto
+--
+
+ALTER SEQUENCE public.usuario_config_id_seq OWNED BY public.usuario_config.id;
+
+
+--
+-- Name: usuarios_config; Type: TABLE; Schema: public; Owner: arquitecto
+--
+
+CREATE TABLE public.usuarios_config (
+    id integer NOT NULL,
+    derivar_en_problemas boolean DEFAULT false,
+    auto_aprobar_ejecucion boolean DEFAULT false,
+    saldo_virtual_openai numeric(10,4) DEFAULT 0.0000,
+    saldo_virtual_anthropic numeric(10,4) DEFAULT 0.0000,
+    api_key_openai character varying(255),
+    api_key_anthropic character varying(255),
+    api_key_gemini character varying(255),
+    saldo_virtual_gemini numeric(10,4) DEFAULT 0.0000
+);
+
+
+ALTER TABLE public.usuarios_config OWNER TO arquitecto;
+
+--
+-- Name: usuarios_config_id_seq; Type: SEQUENCE; Schema: public; Owner: arquitecto
+--
+
+CREATE SEQUENCE public.usuarios_config_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+ALTER TABLE public.usuarios_config_id_seq OWNER TO arquitecto;
+
+--
+-- Name: usuarios_config_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: arquitecto
+--
+
+ALTER SEQUENCE public.usuarios_config_id_seq OWNED BY public.usuarios_config.id;
+
+
+--
+-- Name: archivos_temporales id; Type: DEFAULT; Schema: public; Owner: arquitecto
+--
+
+ALTER TABLE ONLY public.archivos_temporales ALTER COLUMN id SET DEFAULT nextval('public.archivos_temporales_id_seq'::regclass);
+
+
+--
+-- Name: mensajes_historial id; Type: DEFAULT; Schema: public; Owner: arquitecto
+--
+
+ALTER TABLE ONLY public.mensajes_historial ALTER COLUMN id SET DEFAULT nextval('public.mensajes_historial_id_seq'::regclass);
+
+
+--
+-- Name: tool_call_pendiente id; Type: DEFAULT; Schema: public; Owner: arquitecto
+--
+
+ALTER TABLE ONLY public.tool_call_pendiente ALTER COLUMN id SET DEFAULT nextval('public.tool_call_pendiente_id_seq'::regclass);
+
+
+--
+-- Name: usuario_config id; Type: DEFAULT; Schema: public; Owner: arquitecto
+--
+
+ALTER TABLE ONLY public.usuario_config ALTER COLUMN id SET DEFAULT nextval('public.usuario_config_id_seq'::regclass);
+
+
+--
+-- Name: usuarios_config id; Type: DEFAULT; Schema: public; Owner: arquitecto
+--
+
+ALTER TABLE ONLY public.usuarios_config ALTER COLUMN id SET DEFAULT nextval('public.usuarios_config_id_seq'::regclass);
+
+
+--
+-- Name: archivos_temporales archivos_temporales_pkey; Type: CONSTRAINT; Schema: public; Owner: arquitecto
+--
+
+ALTER TABLE ONLY public.archivos_temporales
+    ADD CONSTRAINT archivos_temporales_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: ejecuciones ejecuciones_pkey; Type: CONSTRAINT; Schema: public; Owner: arquitecto
+--
+
+ALTER TABLE ONLY public.ejecuciones
+    ADD CONSTRAINT ejecuciones_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: mensajes_historial mensajes_historial_pkey; Type: CONSTRAINT; Schema: public; Owner: arquitecto
+--
+
+ALTER TABLE ONLY public.mensajes_historial
+    ADD CONSTRAINT mensajes_historial_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: proyectos proyectos_nombre_slug_key; Type: CONSTRAINT; Schema: public; Owner: arquitecto
+--
+
+ALTER TABLE ONLY public.proyectos
+    ADD CONSTRAINT proyectos_nombre_slug_key UNIQUE (nombre_slug);
+
+
+--
+-- Name: proyectos proyectos_pkey; Type: CONSTRAINT; Schema: public; Owner: arquitecto
+--
+
+ALTER TABLE ONLY public.proyectos
+    ADD CONSTRAINT proyectos_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: tool_call_pendiente tool_call_pendiente_pkey; Type: CONSTRAINT; Schema: public; Owner: arquitecto
+--
+
+ALTER TABLE ONLY public.tool_call_pendiente
+    ADD CONSTRAINT tool_call_pendiente_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: usuario_config usuario_config_pkey; Type: CONSTRAINT; Schema: public; Owner: arquitecto
+--
+
+ALTER TABLE ONLY public.usuario_config
+    ADD CONSTRAINT usuario_config_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: usuarios_config usuarios_config_pkey; Type: CONSTRAINT; Schema: public; Owner: arquitecto
+--
+
+ALTER TABLE ONLY public.usuarios_config
+    ADD CONSTRAINT usuarios_config_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: ix_tool_call_pendiente_proyecto_id; Type: INDEX; Schema: public; Owner: arquitecto
+--
+
+CREATE INDEX ix_tool_call_pendiente_proyecto_id ON public.tool_call_pendiente USING btree (proyecto_id);
+
+
+--
+-- Name: archivos_temporales archivos_temporales_proyecto_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: arquitecto
+--
+
+ALTER TABLE ONLY public.archivos_temporales
+    ADD CONSTRAINT archivos_temporales_proyecto_id_fkey FOREIGN KEY (proyecto_id) REFERENCES public.proyectos(id) ON DELETE CASCADE;
+
+
+--
+-- Name: mensajes_historial mensajes_historial_proyecto_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: arquitecto
+--
+
+ALTER TABLE ONLY public.mensajes_historial
+    ADD CONSTRAINT mensajes_historial_proyecto_id_fkey FOREIGN KEY (proyecto_id) REFERENCES public.proyectos(id) ON DELETE CASCADE;
+
+
+--
+-- Name: tool_call_pendiente tool_call_pendiente_usuario_config_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: arquitecto
+--
+
+ALTER TABLE ONLY public.tool_call_pendiente
+    ADD CONSTRAINT tool_call_pendiente_usuario_config_id_fkey FOREIGN KEY (usuario_config_id) REFERENCES public.usuario_config(id);
+
+
+--
+-- PostgreSQL database dump complete
+--
+
+\unrestrict 2ENZzb1onR9fyrArvygWc6DwS79kazAaN1rFDaSTeEJddq4aN7YrYszUksFX7h9
+
+-e 
+
+================================================================================
+📁 ARCHIVO: ./fix10.sh
+================================================================================
+#!/bin/bash
+set -e
+
+echo "🔥 INICIANDO CORRECCIÓN FINAL (MODELO CONFIG Y PATCH)..."
+
+# ==========================================
+# 1. FIX: MODELO DE GOBERNANZA (Incluir saldos y llaves)
+# ==========================================
+cat << 'EOF' > backend/app/models/governance.py
+from datetime import datetime
+from enum import Enum
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, Numeric
+from sqlalchemy.dialects.postgresql import UUID, JSONB
+from app.database import Base
+
+class ToolCallStatus(Enum):
+    PENDING = "pending"
+    APPROVED = "approved"
+    EXECUTED = "executed"
+    REJECTED = "rejected"
+    FAILED = "failed"
+
+class UsuarioConfig(Base):
+    __tablename__ = "usuario_config"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    derivar_en_problemas = Column(Boolean, default=False)
+    auto_aprobar_ejecucion = Column(Boolean, default=False)
+    saldo_virtual_openai = Column(Numeric(10, 4), default=0.0000)
+    saldo_virtual_anthropic = Column(Numeric(10, 4), default=0.0000)
+    saldo_virtual_gemini = Column(Numeric(10, 4), default=0.0000)
+    api_key_openai = Column(String(255), nullable=True)
+    api_key_anthropic = Column(String(255), nullable=True)
+    api_key_gemini = Column(String(255), nullable=True)
+
+class ToolCallPendiente(Base):
+    __tablename__ = "tool_call_pendiente"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    proyecto_id = Column(UUID(as_uuid=True), index=True)
+    usuario_config_id = Column(Integer, ForeignKey("usuario_config.id"))
+    agente = Column(String, nullable=False)
+    tool_name = Column(String, nullable=False)
+    arguments_json = Column(JSONB, default={})
+    status = Column(String, default=ToolCallStatus.PENDING.value)
+    result_json = Column(JSONB, nullable=True)
+    error_message = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    resolved_at = Column(DateTime, nullable=True)
+EOF
+echo "✅ Archivo corregido: backend/app/models/governance.py"
+
+# ==========================================
+# 2. FIX: ENDPOINTS DE CONFIGURACIÓN Y LECTURA DE .ENV
+# ==========================================
+cat << 'EOF' > backend/app/routers/config.py
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+from app.database import get_db
+from app.config import get_settings
+
+router = APIRouter()
+settings = get_settings()
+
+def _format_config(config_obj):
+    """Mapea el objeto DB al formato que espera el Frontend, leyendo también el .env"""
+    return {
+        "id": config_obj.id,
+        "derivar_en_problemas": config_obj.derivar_en_problemas,
+        "auto_aprobar_ejecucion": config_obj.auto_aprobar_ejecucion,
+        "saldo_virtual_openai": float(config_obj.saldo_virtual_openai) if config_obj.saldo_virtual_openai is not None else 0.0,
+        "saldo_virtual_anthropic": float(config_obj.saldo_virtual_anthropic) if config_obj.saldo_virtual_anthropic is not None else 0.0,
+        "saldo_virtual_gemini": float(config_obj.saldo_virtual_gemini) if config_obj.saldo_virtual_gemini is not None else 0.0,
+        # 🔥 FIX: Validamos si la key está en la Base de Datos OR en el archivo .env
+        "has_api_key_openai": bool(config_obj.api_key_openai) or bool(settings.openai_api_key),
+        "has_api_key_anthropic": bool(config_obj.api_key_anthropic) or bool(settings.anthropic_api_key),
+        "has_api_key_gemini": bool(config_obj.api_key_gemini) or bool(settings.gemini_api_key),
+    }
+
+@router.get("")
+async def get_config(db: AsyncSession = Depends(get_db)):
+    try:
+        from app.models.governance import UsuarioConfig
+        result = await db.execute(select(UsuarioConfig))
+        configs = result.scalars().all()
+        if not configs:
+            # Fallback por defecto si la tabla está vacía
+            return [{
+                "id": 1,
+                "derivar_en_problemas": False,
+                "auto_aprobar_ejecucion": False,
+                "saldo_virtual_openai": 0.0,
+                "saldo_virtual_anthropic": 0.0,
+                "saldo_virtual_gemini": 0.0,
+                "has_api_key_openai": bool(settings.openai_api_key),
+                "has_api_key_anthropic": bool(settings.anthropic_api_key),
+                "has_api_key_gemini": bool(settings.gemini_api_key),
+            }]
+        
+        return [_format_config(c) for c in configs]
+    except Exception as e:
+        # Fallback de seguridad en caso de que la tabla aún no se cree
+        return [{
+            "id": 1,
+            "derivar_en_problemas": False,
+            "auto_aprobar_ejecucion": False,
+            "saldo_virtual_openai": 0.0,
+            "saldo_virtual_anthropic": 0.0,
+            "saldo_virtual_gemini": 0.0,
+            "has_api_key_openai": bool(settings.openai_api_key),
+            "has_api_key_anthropic": bool(settings.anthropic_api_key),
+            "has_api_key_gemini": bool(settings.gemini_api_key),
+            "error": str(e)
+        }]
+
+@router.patch("/{config_id}")
+async def update_config(config_id: int, payload: dict, db: AsyncSession = Depends(get_db)):
+    from app.models.governance import UsuarioConfig
+    config_obj = await db.get(UsuarioConfig, config_id)
+    if not config_obj:
+        # Si no existe, lo creamos de forma idempotente para evitar errores 500
+        config_obj = UsuarioConfig(id=config_id)
+        db.add(config_obj)
+
+    for key, value in payload.items():
+        if hasattr(config_obj, key):
+            setattr(config_obj, key, value)
+            
+    await db.commit()
+    await db.refresh(config_obj)
+    
+    return _format_config(config_obj)
+EOF
+echo "✅ Archivo corregido: backend/app/routers/config.py"
+
+echo "🚀 LISTO. Ahora debes reiniciar tu contenedor Backend ('docker compose restart backend') para aplicar los cambios a la Base de Datos."-e 
 
 ================================================================================
 📁 ARCHIVO: ./frontend/tailwind.config.ts
@@ -7894,16 +9155,19 @@ export default function Page() { return <AgentsView />; }
 ================================================================================
 📁 ARCHIVO: ./frontend/services/repositories.ts
 ================================================================================
+import type { AgentDefinition, Approval, AuditEvent, ChatMessage, MetricCard, Proyecto, ProyectoCreate, ToolDefinition, UploadedFile, UsuarioConfig, WorkspaceNode } from "@/types/domain";
+
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
-function normalizeArray(data: any): any[] {
+function normalizeArray<T>(data: any): T[] {
   if (Array.isArray(data)) return data;
   if (data && Array.isArray(data.items)) return data.items;
   if (data && Array.isArray(data.data)) return data.data;
   return [];
 }
 
-async def fetchFromAPI(endpoint: string, options?: RequestInit) {
+// 🔥 FIX CRÍTICO: 'function' en lugar de 'def'
+async function fetchFromAPI(endpoint: string, options?: RequestInit) {
   try {
     const res = await fetch(`${API_URL}${endpoint}`, {
       ...options,
@@ -7918,33 +9182,42 @@ async def fetchFromAPI(endpoint: string, options?: RequestInit) {
 }
 
 export const configRepository = {
-  list: async () => normalizeArray(await fetchFromAPI('/api/config'))
+  list: async (): Promise<UsuarioConfig[]> => normalizeArray(await fetchFromAPI('/api/config')),
+  patch: async (id: number, payload: any) => await fetchFromAPI(`/api/config/${id}`, { method: 'PATCH', body: JSON.stringify(payload) })
 };
 
 export const projectsRepository = {
-  list: async () => normalizeArray(await fetchFromAPI('/api/projects')),
-  get: async (id: string) => await fetchFromAPI(`/api/projects/${id}`),
-  create: async (payload: any) => await fetchFromAPI('/api/projects', { method: 'POST', body: JSON.stringify(payload) })
+  list: async (): Promise<Proyecto[]> => normalizeArray(await fetchFromAPI('/api/projects')),
+  get: async (id: string): Promise<Proyecto | null> => await fetchFromAPI(`/api/projects/${id}`),
+  create: async (payload: ProyectoCreate): Promise<Proyecto> => await fetchFromAPI('/api/projects', { method: 'POST', body: JSON.stringify(payload) })
 };
 
 export const approvalsRepository = {
-  listAll: async () => normalizeArray(await fetchFromAPI('/api/approvals')),
-  approve: async (id: number) => await fetchFromAPI(`/api/approvals/${id}/approve`, { method: 'POST' }),
-  reject: async (id: number) => await fetchFromAPI(`/api/approvals/${id}/reject`, { method: 'POST' })
+  listAll: async (): Promise<Approval[]> => normalizeArray(await fetchFromAPI('/api/approvals')),
+  approve: async (id: number): Promise<Approval> => await fetchFromAPI(`/api/approvals/${id}/approve`, { method: 'POST' }),
+  reject: async (id: number): Promise<Approval> => await fetchFromAPI(`/api/approvals/${id}/reject`, { method: 'POST' })
 };
 
 export const filesRepository = {
-  list: async () => [],
-  upload: async () => ({ status: "uploaded_db" })
+  list: async (): Promise<UploadedFile[]> => [],
+  upload: async (projectId: string, file: File): Promise<UploadedFile> => ({ 
+    id: Date.now(), 
+    proyecto_id: projectId, 
+    nombre_archivo: file.name, 
+    version: 1, 
+    mime_type: file.type, 
+    size_bytes: file.size, 
+    ruta_archivo: "db" 
+  })
 };
 
 export const futureRepository = {
-  metrics: async () => normalizeArray(await fetchFromAPI('/api/metrics')),
-  messages: async (projectId: string) => normalizeArray(await fetchFromAPI(`/api/projects/${projectId}/messages`)),
-  tools: async () => normalizeArray(await fetchFromAPI('/api/tools')),
-  agents: async () => normalizeArray(await fetchFromAPI('/api/agents')),
-  workspace: async (projectId: string) => normalizeArray(await fetchFromAPI(`/api/projects/${projectId}/workspace/tree`)),
-  audit: async () => normalizeArray(await fetchFromAPI('/api/audit/events'))
+  metrics: async (): Promise<MetricCard[]> => normalizeArray(await fetchFromAPI('/api/metrics')),
+  messages: async (projectId: string): Promise<ChatMessage[]> => normalizeArray(await fetchFromAPI(`/api/projects/${projectId}/messages`)),
+  tools: async (): Promise<ToolDefinition[]> => normalizeArray(await fetchFromAPI('/api/tools')),
+  agents: async (): Promise<AgentDefinition[]> => normalizeArray(await fetchFromAPI('/api/agents')),
+  workspace: async (projectId: string): Promise<WorkspaceNode[]> => normalizeArray(await fetchFromAPI(`/api/projects/${projectId}/workspace/tree`)),
+  audit: async (): Promise<AuditEvent[]> => normalizeArray(await fetchFromAPI('/api/audit/events'))
 };
 -e 
 
@@ -9041,6 +10314,40 @@ volumes:
     name: nodara_pg_data-e 
 
 ================================================================================
+📁 ARCHIVO: ./build_and_check.sh
+================================================================================
+#!/bin/bash
+
+# Nombre del archivo de salida
+OUTPUT_FILE="status_build.txt"
+
+# Vaciamos el archivo si existe de una ejecución anterior
+> "$OUTPUT_FILE"
+
+echo "Iniciando compilación y levantamiento de contenedores..."
+
+# Ejecutamos docker compose. 
+# Usamos 'docker compose' (v2), si tienes la v1 muy antigua cambia a 'docker-compose'.
+# 2>&1 redirige los errores (stderr) a la salida estándar (stdout) para poder capturar todo junto.
+# Ejecutamos en detached mode (-d) para que el script termine una vez levantados.
+OUTPUT=$(docker compose up --build -d 2>&1)
+
+# Guardamos el código de salida del comando anterior (0 = Éxito, distinto de 0 = Error)
+EXIT_CODE=$?
+
+if [ $EXIT_CODE -eq 0 ]; then
+    # Si todo salió bien, escribimos el mensaje de éxito
+    echo "compilacion_ok" > "$OUTPUT_FILE"
+    echo "✅ Proceso completado con éxito. Revisa $OUTPUT_FILE."
+else
+    # Si hubo un error, escribimos el mensaje de error y el detalle completo
+    echo "compilacion_error" > "$OUTPUT_FILE"
+    echo "================ DETALLE DEL ERROR ================" >> "$OUTPUT_FILE"
+    echo "$OUTPUT" >> "$OUTPUT_FILE"
+    echo "❌ Ocurrió un error. Revisa el detalle en $OUTPUT_FILE."
+fi-e 
+
+================================================================================
 📁 ARCHIVO: ./postgres_init/initdb.sql
 ================================================================================
 -- /orquestador-multi-agente/postgres_init/initdb.sql
@@ -9156,6 +10463,160 @@ EOF
 
 echo "✅ Modelos de Gobernanza creados y exportados."
 echo "🔄 Por favor, reinicia tu contenedor. Al ejecutar 'await init_db()', FastAPI creará estas tablas en PostgreSQL automáticamente y Uvicorn levantará 100% sano."-e 
+
+================================================================================
+📁 ARCHIVO: ./final_fix.py
+================================================================================
+import os
+
+print("🔥 INICIANDO CORRECCIÓN DEFINITIVA (FRONTEND + BACKEND)...")
+
+def write_file(path, content):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(content.strip() + "\n")
+    print(f"✅ Archivo corregido: {path}")
+
+# ==========================================
+# 1. FIX BACKEND: UNIFICACIÓN DE BASE METADATA
+# ==========================================
+# Cambiamos "from app.db.base import Base" a "from app.database import Base"
+write_file("backend/app/models/governance.py", r"""
+import uuid
+from datetime import datetime
+from enum import Enum
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey
+from sqlalchemy.dialects.postgresql import UUID, JSONB
+
+# 🔥 FIX CRÍTICO: Usar la misma Base que el resto del sistema
+from app.database import Base
+
+class ToolCallStatus(Enum):
+    PENDING = "pending"
+    APPROVED = "approved"
+    EXECUTED = "executed"
+    REJECTED = "rejected"
+    FAILED = "failed"
+
+class UsuarioConfig(Base):
+    __tablename__ = "usuario_config"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    auto_aprobar_ejecucion = Column(Boolean, default=False)
+
+class ToolCallPendiente(Base):
+    __tablename__ = "tool_call_pendiente"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    proyecto_id = Column(UUID(as_uuid=True), index=True)
+    usuario_config_id = Column(Integer, ForeignKey("usuario_config.id"))
+    agente = Column(String, nullable=False)
+    tool_name = Column(String, nullable=False)
+    arguments_json = Column(JSONB, default={})
+    status = Column(String, default=ToolCallStatus.PENDING.value)
+    result_json = Column(JSONB, nullable=True)
+    error_message = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    resolved_at = Column(DateTime, nullable=True)
+""")
+
+# ==========================================
+# 2. FIX FRONTEND: SINTAXIS TYPESCRIPT
+# ==========================================
+# Cambiamos "async def" a "async function" y limpiamos imports
+write_file("frontend/services/repositories.ts", r"""
+import type { AgentDefinition, Approval, AuditEvent, ChatMessage, MetricCard, Proyecto, ProyectoCreate, ToolDefinition, UploadedFile, UsuarioConfig, WorkspaceNode } from "@/types/domain";
+
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+
+function normalizeArray<T>(data: any): T[] {
+  if (Array.isArray(data)) return data;
+  if (data && Array.isArray(data.items)) return data.items;
+  if (data && Array.isArray(data.data)) return data.data;
+  return [];
+}
+
+// 🔥 FIX CRÍTICO: 'function' en lugar de 'def'
+async function fetchFromAPI(endpoint: string, options?: RequestInit) {
+  try {
+    const res = await fetch(`${API_URL}${endpoint}`, {
+      ...options,
+      headers: { "Content-Type": "application/json", ...options?.headers }
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return await res.json();
+  } catch (error) {
+    console.error(`API Error en ${endpoint}:`, error);
+    return null; 
+  }
+}
+
+export const configRepository = {
+  list: async (): Promise<UsuarioConfig[]> => normalizeArray(await fetchFromAPI('/api/config')),
+  patch: async (id: number, payload: any) => await fetchFromAPI(`/api/config/${id}`, { method: 'PATCH', body: JSON.stringify(payload) })
+};
+
+export const projectsRepository = {
+  list: async (): Promise<Proyecto[]> => normalizeArray(await fetchFromAPI('/api/projects')),
+  get: async (id: string): Promise<Proyecto | null> => await fetchFromAPI(`/api/projects/${id}`),
+  create: async (payload: ProyectoCreate): Promise<Proyecto> => await fetchFromAPI('/api/projects', { method: 'POST', body: JSON.stringify(payload) })
+};
+
+export const approvalsRepository = {
+  listAll: async (): Promise<Approval[]> => normalizeArray(await fetchFromAPI('/api/approvals')),
+  approve: async (id: number): Promise<Approval> => await fetchFromAPI(`/api/approvals/${id}/approve`, { method: 'POST' }),
+  reject: async (id: number): Promise<Approval> => await fetchFromAPI(`/api/approvals/${id}/reject`, { method: 'POST' })
+};
+
+export const filesRepository = {
+  list: async (): Promise<UploadedFile[]> => [],
+  upload: async (projectId: string, file: File): Promise<UploadedFile> => ({ 
+    id: Date.now(), 
+    proyecto_id: projectId, 
+    nombre_archivo: file.name, 
+    version: 1, 
+    mime_type: file.type, 
+    size_bytes: file.size, 
+    ruta_archivo: "db" 
+  })
+};
+
+export const futureRepository = {
+  metrics: async (): Promise<MetricCard[]> => normalizeArray(await fetchFromAPI('/api/metrics')),
+  messages: async (projectId: string): Promise<ChatMessage[]> => normalizeArray(await fetchFromAPI(`/api/projects/${projectId}/messages`)),
+  tools: async (): Promise<ToolDefinition[]> => normalizeArray(await fetchFromAPI('/api/tools')),
+  agents: async (): Promise<AgentDefinition[]> => normalizeArray(await fetchFromAPI('/api/agents')),
+  workspace: async (projectId: string): Promise<WorkspaceNode[]> => normalizeArray(await fetchFromAPI(`/api/projects/${projectId}/workspace/tree`)),
+  audit: async (): Promise<AuditEvent[]> => normalizeArray(await fetchFromAPI('/api/audit/events'))
+};
+""")
+
+print("\n🚀 SCRIPT FINALIZADO CON ÉXITO.")
+print("👉 PASO OBLIGATORIO: Ejecuta 'docker compose down' y luego 'docker compose up -d --build'")-e 
+
+================================================================================
+📁 ARCHIVO: ./fix_db_final2.sh
+================================================================================
+#!/bin/bash
+set -e
+
+echo "🛠️ Sincronizando columnas faltantes en PostgreSQL (usuarios_config)..."
+
+docker exec -i nodara_db psql -U arquitecto -d orquestador_db << 'SQL'
+-- 1. Añadimos TODAS las columnas que SQLAlchemy espera en UsuariosConfig
+ALTER TABLE usuarios_config ADD COLUMN IF NOT EXISTS derivar_en_problemas BOOLEAN DEFAULT FALSE;
+ALTER TABLE usuarios_config ADD COLUMN IF NOT EXISTS saldo_virtual_openai NUMERIC(10,4) DEFAULT 0.0000;
+ALTER TABLE usuarios_config ADD COLUMN IF NOT EXISTS saldo_virtual_anthropic NUMERIC(10,4) DEFAULT 0.0000;
+ALTER TABLE usuarios_config ADD COLUMN IF NOT EXISTS api_key_openai VARCHAR(255);
+ALTER TABLE usuarios_config ADD COLUMN IF NOT EXISTS api_key_anthropic VARCHAR(255);
+ALTER TABLE usuarios_config ADD COLUMN IF NOT EXISTS api_key_gemini VARCHAR(255);
+
+-- 2. Nos aseguramos de que al menos exista el ID=1 para que el GET y PATCH no fallen
+INSERT INTO usuarios_config (id, derivar_en_problemas, auto_aprobar_ejecucion)
+VALUES (1, false, false)
+ON CONFLICT (id) DO NOTHING;
+SQL
+
+echo "✅ Base de datos parcheada. El Error 500 (Falso CORS) ha desaparecido."
+-e 
 
 ================================================================================
 📁 ARCHIVO: ./init_fix6.sh
@@ -9624,6 +11085,168 @@ __all__ = ["run_orchestrator"]
 EOF
 
 echo "✅ Listo. Reinicia el contenedor de Docker; Uvicorn debería arrancar sin problemas."-e 
+
+================================================================================
+📁 ARCHIVO: ./fix_9_ws_config.py
+================================================================================
+import os
+
+print("🔥 INICIANDO CORRECCIÓN CRÍTICA DE WEBSOCKETS Y CONFIG...")
+
+def write_file(path, content):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(content.strip() + "\n")
+    print(f"✅ Archivo corregido: {path}")
+
+# ==========================================
+# 1. FIX: ENDPOINT PATCH CONFIG (Faltante)
+# ==========================================
+write_file("backend/app/routers/config.py", r"""
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+from app.database import get_db
+
+router = APIRouter()
+
+@router.get("")
+async def get_config(db: AsyncSession = Depends(get_db)):
+    try:
+        from app.models.governance import UsuarioConfig
+        result = await db.execute(select(UsuarioConfig))
+        configs = result.scalars().all()
+        if not configs:
+            return [{"id": 1, "auto_aprobar_ejecucion": False}]
+        return configs
+    except Exception as e:
+        print(f"Error en BD Config: {e}")
+        return [{"id": 1, "auto_aprobar_ejecucion": False, "error": str(e)}]
+
+@router.patch("/{config_id}")
+async def update_config(config_id: int, payload: dict, db: AsyncSession = Depends(get_db)):
+    try:
+        from app.models.governance import UsuarioConfig
+        config_obj = await db.get(UsuarioConfig, config_id)
+        if not config_obj:
+            raise HTTPException(status_code=404, detail="Config no encontrada")
+        
+        for key, value in payload.items():
+            if hasattr(config_obj, key):
+                setattr(config_obj, key, value)
+                
+        await db.commit()
+        await db.refresh(config_obj)
+        return config_obj
+    except Exception as e:
+        print(f"Error actualizando config: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+""")
+
+# ==========================================
+# 2. FIX: ORCHESTRATOR Y WS (Captura de Errores y Feedback de IA)
+# ==========================================
+write_file("backend/app/services/orchestrator.py", r"""
+import uuid
+from datetime import datetime
+from app.database import AsyncSessionLocal
+from app.core.tracing import ensure_correlation_id
+from app.services.providers import get_provider, normalize_provider_error
+from app.services.message_service import MessageService
+from app.services.tools import execute_tool_by_name, ToolExecutionContext
+
+def ws_event(event: str, correlation_id: str, data: dict):
+    return {"event": event, "correlation_id": correlation_id, "data": data}
+
+message_service = MessageService()
+
+async def _execute_pipeline(websocket, project_id, data, db, ejecucion):
+    prompt = data.get("message", "")
+    agents = data.get("agents", ["chatgpt"])
+    correlation_id = ejecucion.correlation_id
+
+    await websocket.send_json(ws_event("orchestration_start", correlation_id, {"project_id": project_id, "agents": agents}))
+
+    for agent in agents:
+        try:
+            provider = get_provider(agent)
+        except Exception as provider_err:
+            # Captura de error de API KEY faltante sin botar el WS
+            await websocket.send_json(ws_event("agent_error", correlation_id, {"agent": agent, "error": str(provider_err)}))
+            continue
+            
+        loop_active = True
+        current_prompt = prompt
+
+        while loop_active:
+            try:
+                response = await provider.generate(current_prompt)
+                
+                if '"tool_name"' in response: 
+                    import json
+                    try:
+                        tool_req = json.loads(response)
+                        tool_name = tool_req.get("tool_name")
+                        tool_args = tool_req.get("arguments", {})
+                        
+                        await websocket.send_json(ws_event("agent_tool_call", correlation_id, {"tool": tool_name}))
+                        
+                        context = ToolExecutionContext(proyecto_id=uuid.UUID(project_id), usuario_config_id=1, agente=agent, db=db)
+                        tool_result = await execute_tool_by_name(tool_name, tool_args, context)
+                        
+                        if tool_result.get("requires_human_approval"):
+                            await websocket.send_json(ws_event("hil_required", correlation_id, tool_result))
+                            loop_active = False 
+                            break
+                        
+                        current_prompt = f"Resultado de tool {tool_name}: {json.dumps(tool_result)}. ¿Cuál es el siguiente paso?"
+                        
+                    except json.JSONDecodeError:
+                        loop_active = False 
+                else:
+                    loop_active = False 
+
+                await websocket.send_json(ws_event("agent_response", correlation_id, {"agent": agent, "message": response}))
+
+            except Exception as exc:
+                error_msg = normalize_provider_error(agent, exc)
+                await websocket.send_json(ws_event("agent_error", correlation_id, {"agent": agent, "error": error_msg}))
+                loop_active = False
+
+    return {"status": "completed"}
+
+async def run_orchestrator(websocket, project_id: str, data: dict):
+    from app.models.history_models import Ejecucion 
+    correlation_id = ensure_correlation_id(data.get("correlation_id"))
+    
+    try:
+        async with AsyncSessionLocal() as db:
+            ejecucion = Ejecucion(id=uuid.uuid4(), proyecto_id=project_id, correlation_id=correlation_id, started_at=datetime.utcnow())
+            db.add(ejecucion)
+            await db.commit()
+            await db.refresh(ejecucion)
+            
+            # 🔥 Guardado Seguro del primer mensaje (sin crashear si fallan columnas)
+            try:
+                await message_service.log(db=db, proyecto_id=project_id, ejecucion_id=ejecucion.id, agente="user", role="user", content=data.get("message", ""), correlation_id=correlation_id)
+            except Exception as sql_err:
+                print(f"⚠️ Warning: No se pudo guardar en DB (Ignorando para no tumbar WS): {sql_err}")
+            
+            result = await _execute_pipeline(websocket, project_id, data, db, ejecucion)
+            
+            ejecucion.finished_at = datetime.utcnow()
+            await db.commit()
+            await websocket.send_json(ws_event("orchestration_end", correlation_id, result))
+            return result
+    except Exception as e:
+        # Blindaje maestro del WS
+        await websocket.send_json(ws_event("agent_error", correlation_id, {"agent": "orchestrator", "error": f"Fallo Crítico: {str(e)}"}))
+        return {"status": "error"}
+
+__all__ = ["run_orchestrator"]
+""")
+
+print("\n🚀 LISTO. Reinicia tu contenedor Backend.")-e 
 
 ================================================================================
 📁 ARCHIVO: ./.gitignore

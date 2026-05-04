@@ -1,10 +1,7 @@
-import uuid
 from datetime import datetime
 from enum import Enum
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, Numeric
 from sqlalchemy.dialects.postgresql import UUID, JSONB
-
-# 🔥 FIX CRÍTICO: Usar la misma Base que el resto del sistema
 from app.database import Base
 
 class ToolCallStatus(Enum):
@@ -17,7 +14,14 @@ class ToolCallStatus(Enum):
 class UsuarioConfig(Base):
     __tablename__ = "usuario_config"
     id = Column(Integer, primary_key=True, autoincrement=True)
+    derivar_en_problemas = Column(Boolean, default=False)
     auto_aprobar_ejecucion = Column(Boolean, default=False)
+    saldo_virtual_openai = Column(Numeric(10, 4), default=0.0000)
+    saldo_virtual_anthropic = Column(Numeric(10, 4), default=0.0000)
+    saldo_virtual_gemini = Column(Numeric(10, 4), default=0.0000)
+    api_key_openai = Column(String(255), nullable=True)
+    api_key_anthropic = Column(String(255), nullable=True)
+    api_key_gemini = Column(String(255), nullable=True)
 
 class ToolCallPendiente(Base):
     __tablename__ = "tool_call_pendiente"

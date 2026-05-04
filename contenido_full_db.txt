@@ -2,7 +2,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict Cn65Pj2OysGIofrZlzhucsnHzSSrOZrjP6bHTRj47QmdwxukBfZ2ZLDJynQL22y
+\restrict 2ENZzb1onR9fyrArvygWc6DwS79kazAaN1rFDaSTeEJddq4aN7YrYszUksFX7h9
 
 -- Dumped from database version 15.17
 -- Dumped by pg_dump version 15.17
@@ -160,6 +160,83 @@ CREATE TABLE public.proyectos (
 ALTER TABLE public.proyectos OWNER TO arquitecto;
 
 --
+-- Name: tool_call_pendiente; Type: TABLE; Schema: public; Owner: arquitecto
+--
+
+CREATE TABLE public.tool_call_pendiente (
+    id integer NOT NULL,
+    proyecto_id uuid,
+    usuario_config_id integer,
+    agente character varying NOT NULL,
+    tool_name character varying NOT NULL,
+    arguments_json jsonb,
+    status character varying,
+    result_json jsonb,
+    error_message character varying,
+    created_at timestamp without time zone,
+    resolved_at timestamp without time zone
+);
+
+
+ALTER TABLE public.tool_call_pendiente OWNER TO arquitecto;
+
+--
+-- Name: tool_call_pendiente_id_seq; Type: SEQUENCE; Schema: public; Owner: arquitecto
+--
+
+CREATE SEQUENCE public.tool_call_pendiente_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+ALTER TABLE public.tool_call_pendiente_id_seq OWNER TO arquitecto;
+
+--
+-- Name: tool_call_pendiente_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: arquitecto
+--
+
+ALTER SEQUENCE public.tool_call_pendiente_id_seq OWNED BY public.tool_call_pendiente.id;
+
+
+--
+-- Name: usuario_config; Type: TABLE; Schema: public; Owner: arquitecto
+--
+
+CREATE TABLE public.usuario_config (
+    id integer NOT NULL,
+    auto_aprobar_ejecucion boolean
+);
+
+
+ALTER TABLE public.usuario_config OWNER TO arquitecto;
+
+--
+-- Name: usuario_config_id_seq; Type: SEQUENCE; Schema: public; Owner: arquitecto
+--
+
+CREATE SEQUENCE public.usuario_config_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+ALTER TABLE public.usuario_config_id_seq OWNER TO arquitecto;
+
+--
+-- Name: usuario_config_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: arquitecto
+--
+
+ALTER SEQUENCE public.usuario_config_id_seq OWNED BY public.usuario_config.id;
+
+
+--
 -- Name: usuarios_config; Type: TABLE; Schema: public; Owner: arquitecto
 --
 
@@ -171,7 +248,8 @@ CREATE TABLE public.usuarios_config (
     saldo_virtual_anthropic numeric(10,4) DEFAULT 0.0000,
     api_key_openai character varying(255),
     api_key_anthropic character varying(255),
-    api_key_gemini character varying(255)
+    api_key_gemini character varying(255),
+    saldo_virtual_gemini numeric(10,4) DEFAULT 0.0000
 );
 
 
@@ -211,6 +289,20 @@ ALTER TABLE ONLY public.archivos_temporales ALTER COLUMN id SET DEFAULT nextval(
 --
 
 ALTER TABLE ONLY public.mensajes_historial ALTER COLUMN id SET DEFAULT nextval('public.mensajes_historial_id_seq'::regclass);
+
+
+--
+-- Name: tool_call_pendiente id; Type: DEFAULT; Schema: public; Owner: arquitecto
+--
+
+ALTER TABLE ONLY public.tool_call_pendiente ALTER COLUMN id SET DEFAULT nextval('public.tool_call_pendiente_id_seq'::regclass);
+
+
+--
+-- Name: usuario_config id; Type: DEFAULT; Schema: public; Owner: arquitecto
+--
+
+ALTER TABLE ONLY public.usuario_config ALTER COLUMN id SET DEFAULT nextval('public.usuario_config_id_seq'::regclass);
 
 
 --
@@ -261,11 +353,34 @@ ALTER TABLE ONLY public.proyectos
 
 
 --
+-- Name: tool_call_pendiente tool_call_pendiente_pkey; Type: CONSTRAINT; Schema: public; Owner: arquitecto
+--
+
+ALTER TABLE ONLY public.tool_call_pendiente
+    ADD CONSTRAINT tool_call_pendiente_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: usuario_config usuario_config_pkey; Type: CONSTRAINT; Schema: public; Owner: arquitecto
+--
+
+ALTER TABLE ONLY public.usuario_config
+    ADD CONSTRAINT usuario_config_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: usuarios_config usuarios_config_pkey; Type: CONSTRAINT; Schema: public; Owner: arquitecto
 --
 
 ALTER TABLE ONLY public.usuarios_config
     ADD CONSTRAINT usuarios_config_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: ix_tool_call_pendiente_proyecto_id; Type: INDEX; Schema: public; Owner: arquitecto
+--
+
+CREATE INDEX ix_tool_call_pendiente_proyecto_id ON public.tool_call_pendiente USING btree (proyecto_id);
 
 
 --
@@ -285,8 +400,16 @@ ALTER TABLE ONLY public.mensajes_historial
 
 
 --
+-- Name: tool_call_pendiente tool_call_pendiente_usuario_config_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: arquitecto
+--
+
+ALTER TABLE ONLY public.tool_call_pendiente
+    ADD CONSTRAINT tool_call_pendiente_usuario_config_id_fkey FOREIGN KEY (usuario_config_id) REFERENCES public.usuario_config(id);
+
+
+--
 -- PostgreSQL database dump complete
 --
 
-\unrestrict Cn65Pj2OysGIofrZlzhucsnHzSSrOZrjP6bHTRj47QmdwxukBfZ2ZLDJynQL22y
+\unrestrict 2ENZzb1onR9fyrArvygWc6DwS79kazAaN1rFDaSTeEJddq4aN7YrYszUksFX7h9
 

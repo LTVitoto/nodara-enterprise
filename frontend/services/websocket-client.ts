@@ -17,11 +17,7 @@ function normalizeWsEvent(raw: any): WsIncomingEvent {
     agent: raw?.agent ?? data?.agent,
     delta: raw?.delta ?? data?.delta,
     content: raw?.content ?? data?.content,
-    message:
-      raw?.message ??
-      data?.message ??
-      data?.status ??
-      data?.detail,
+    message: raw?.message ?? data?.message ?? data?.status ?? data?.detail,
     approval_id: raw?.approval_id ?? data?.approval_id,
     tool_name: raw?.tool_name ?? data?.tool_name,
     payload: data,
@@ -37,12 +33,14 @@ export function createMultiAgentWsClient(params: {
   onStatus?: (status: "connecting" | "open" | "closed" | "error") => void;
 }): MultiAgentWsClient {
   let socket: WebSocket | null = null;
+  let isIntentionallyClosed = false; // 🔥 Bandera para evitar re-conexiones zombis
 
   function connect() {
+    if (socket) return; // Evita conexiones duplicadas
     params.onStatus?.("connecting");
+    isIntentionallyClosed = false;
 
     const url = `${WS_BASE_URL}/ws/chat/${params.projectId}?usuario_config_id=${params.usuarioConfigId}`;
-
     socket = new WebSocket(url);
 
     socket.onopen = () => {
@@ -51,71 +49,50 @@ export function createMultiAgentWsClient(params: {
     };
 
     socket.onclose = (event) => {
-      console.log("[WS] cerrado:", event.code, event.reason);
+      console.log(`[WS] cerrado: ${event.code}`);
       params.onStatus?.("closed");
+      socket = null;
     };
 
     socket.onerror = (event) => {
-      console.error("[WS] error:", event);
-      params.onStatus?.("error");
+      if (!isIntentionallyClosed) {
+        console.error("[WS] error:", event);
+        params.onStatus?.("error");
+      }
     };
 
     socket.onmessage = (message) => {
       try {
         const raw = JSON.parse(message.data);
-        const normalized = normalizeWsEvent(raw);
-        console.log("[WS] evento normalizado:", normalized);
-        params.onEvent(normalized);
+        params.onEvent(normalizeWsEvent(raw));
       } catch {
-        params.onEvent({
-          type: "agent_delta",
-          delta: String(message.data)
-        });
+        params.onEvent({ type: "agent_delta", delta: String(message.data) });
       }
     };
   }
 
   function send(message: string) {
     if (!socket || socket.readyState !== WebSocket.OPEN) {
-      console.warn("[WS] socket no está abierto. Estado:", socket?.readyState);
+      console.warn("[WS] Intento de envío sin conexión abierta.");
       return;
     }
-
-    const payload: WsOutboundMessage = {
-      message,
-      correlation_id: crypto.randomUUID()
-    };
-
-    console.log("[WS] enviando:", payload);
+    const payload: WsOutboundMessage = { message, correlation_id: crypto.randomUUID() };
     socket.send(JSON.stringify(payload));
   }
 
   function close() {
-    socket?.close();
-    socket = null;
+    isIntentionallyClosed = true;
+    if (socket) {
+      socket.close(1000, "Component Unmounted");
+      socket = null;
+    }
   }
 
   return { connect, send, close };
 }
 
 export function simulateWsEvents(message: string, onEvent: (event: WsIncomingEvent) => void) {
-  const agent = message.toLowerCase().startsWith("gemini:")
-    ? "gemini"
-    : message.toLowerCase().startsWith("claude:")
-      ? "claude"
-      : message.toLowerCase().startsWith("alineación:") || message.toLowerCase().startsWith("alineacion:")
-        ? "orchestrator"
-        : "chatgpt";
-
-  const script: WsIncomingEvent[] = [
-    { type: "orchestration_start", message: "Iniciando orquestación" },
-    { type: "agent_selected", agent, message: `Agente seleccionado: ${agent}` },
-    { type: "agent_message_start", agent },
-    { type: "agent_delta", agent, delta: "Validación mock activa. " },
-    { type: "agent_delta", agent, delta: "El frontend está conectado al contrato Sprint 1 y preparado para Sprint 2-4 con mocks. " },
-    { type: "agent_message_end", agent },
-    { type: "orchestration_end", message: "Orquestación finalizada" }
-  ];
-
-  script.forEach((event, index) => setTimeout(() => onEvent(event), 220 * (index + 1)));
+  // Mock simplificado
+  onEvent({ type: "orchestration_start", message: "Iniciando orquestación mock" });
+  setTimeout(() => onEvent({ type: "orchestration_end", message: "Fin mock" }), 1000);
 }

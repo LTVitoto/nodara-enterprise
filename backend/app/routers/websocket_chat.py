@@ -1,17 +1,10 @@
-from __future__ import annotations
-
-from uuid import UUID
-
 from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
+from uuid import UUID
+import logging
+from app.services.orchestrator import run_orchestrator
 
-from app.config import get_settings
-from app.database import AsyncSessionLocal
-from app.services.orchestrator import MultiAgentOrchestrator
-from app.services.ws_events import ws_error
-
+logger = logging.getLogger("websocket")
 router = APIRouter()
-settings = get_settings()
-
 
 @router.websocket("/ws/chat/{proyecto_id}")
 async def websocket_chat(
@@ -20,31 +13,21 @@ async def websocket_chat(
     usuario_config_id: int = Query(default=1),
 ):
     await websocket.accept()
-    orchestrator = MultiAgentOrchestrator()
-
+    logger.info(f"WS Handshake aceptado | Proyecto: {proyecto_id}")
     try:
         while True:
             payload = await websocket.receive_json()
             message = payload.get("message") or payload.get("content")
-            correlation_id = payload.get("correlation_id")
+            correlation_id = payload.get("correlation_id", "req-000")
 
             if not message:
-                await websocket.send_json(ws_error("Payload inválido. Debe incluir 'message'.", correlation_id))
+                await websocket.send_json({"event": "error", "data": {"message": "Payload inválido"}})
                 continue
 
-            async with AsyncSessionLocal() as db:
-                await orchestrator.handle_architect_message(
-                    websocket=websocket,
-                    db=db,
-                    proyecto_id=proyecto_id,
-                    usuario_config_id=usuario_config_id,
-                    message=message,
-                    correlation_id=correlation_id,
-                )
+            # Delegamos al Orquestador Funcional inyectando los parámetros validados
+            await run_orchestrator(websocket, str(proyecto_id), usuario_config_id, payload)
+            
     except WebSocketDisconnect:
-        return
-    except Exception as exc:
-        try:
-            await websocket.send_json(ws_error(str(exc)))
-        except Exception:
-            return
+        logger.info(f"WS Desconectado | Proyecto: {proyecto_id}")
+    except Exception as e:
+        logger.error(f"Error crítico en capa WS: {e}")
