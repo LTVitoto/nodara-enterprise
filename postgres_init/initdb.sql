@@ -55,3 +55,12 @@ CREATE TABLE IF NOT EXISTS Archivos_Temporales (
 INSERT INTO Usuarios_Config (derivar_en_problemas, auto_aprobar_ejecucion) 
 SELECT TRUE, TRUE 
 WHERE NOT EXISTS (SELECT 1 FROM Usuarios_Config LIMIT 1);
+
+CREATE TABLE IF NOT EXISTS Eventos_Auditoria (
+    id SERIAL PRIMARY KEY,
+    actor VARCHAR(255),
+    action VARCHAR(255),
+    target VARCHAR(255),
+    severity VARCHAR(50) DEFAULT 'info',
+    fecha_evento TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);

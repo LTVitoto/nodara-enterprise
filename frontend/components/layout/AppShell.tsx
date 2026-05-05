@@ -54,7 +54,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </nav>
         <div className="border-t border-white/10 p-5">
           <p className="text-xs leading-5 text-white/60">Victor Figueroa · Arquitecto de Soluciones</p>
-          <p className="mt-1 text-xs text-brand-bright">https://www.victorfigueroa.cl</p>
+          <p className="mt-1 text-xs text-brand-bright"><a href='https://www.victorfigueroa.cl' target='_blank' rel='noopener noreferrer' className='text-brand-cyan hover:underline font-bold transition-all'>Victor Figueroa</a></p>
         </div>
       </aside>
 

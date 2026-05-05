@@ -1,4 +1,4 @@
-import os, subprocess, base64, mimetypes, shutil
+import os, subprocess, base64, mimetypes, shutil, httpx
 from uuid import UUID
 from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException
@@ -9,7 +9,7 @@ from app.database import get_db
 from app.config import get_settings
 from app.schemas import ProyectoCreate, ProyectoOut
 from app.services.slug import slugify
-from app.routers.github import delete_repo
+from app.models.audit import EventoAuditoria
 router = APIRouter()
 settings = get_settings()
 class ReadmeUpdate(BaseModel): content: str
@@ -28,6 +28,7 @@ async def create_project(payload: ProyectoCreate, db: AsyncSession = Depends(get
     filtered_data = {k: v for k, v in data.items() if k in valid_keys and k != 'nombre_slug'}
     obj = Proyecto(**filtered_data, nombre_slug=slug)
     db.add(obj)
+    db.add(EventoAuditoria(actor='Sistema', action='Proyecto Registrado en DB', target=slug, severity='success'))
     await db.commit()
     await db.refresh(obj)
     try:
@@ -35,19 +36,46 @@ async def create_project(payload: ProyectoCreate, db: AsyncSession = Depends(get
         ws.mkdir(parents=True, exist_ok=True)
         with open(ws / 'README.md', 'w', encoding='utf-8') as f: 
             f.write('# ' + obj.titulo + '\n\n' + obj.descripcion)
-    except: pass
+        tk = settings.github_personal_access_token
+        if tk and obj.github_url:
+            is_private = obj.estado != 'publico'
+            async with httpx.AsyncClient() as client:
+                headers = {'Authorization': f'token {tk}', 'Accept': 'application/vnd.github.v3+json'}
+                r = await client.post('https://api.github.com/user/repos', headers=headers, json={'name': slug, 'private': is_private, 'description': obj.descripcion})
+            subprocess.run(['git', 'init'], cwd=str(ws))
+            subprocess.run(['git', 'add', '.'], cwd=str(ws))
+            subprocess.run(['git', 'config', 'user.email', 'bot@nodara.local'], cwd=str(ws))
+            subprocess.run(['git', 'config', 'user.name', 'Nodara Bot'], cwd=str(ws))
+            subprocess.run(['git', 'commit', '-m', 'Commit Inicial'], cwd=str(ws))
+            auth = obj.github_url.replace('https://', f'https://{tk}@')
+            subprocess.run(['git', 'branch', '-M', 'main'], cwd=str(ws))
+            subprocess.run(['git', 'remote', 'add', 'origin', auth], cwd=str(ws))
+            subprocess.run(['git', 'push', '-u', 'origin', 'main'], cwd=str(ws))
+            db.add(EventoAuditoria(actor='GitOps', action='Workspace y Repo Creado', target=slug, severity='success'))
+            await db.commit()
+    except Exception as e:
+        db.add(EventoAuditoria(actor='Sistema', action=f'Error GitOps: {str(e)}', target=slug, severity='danger'))
+        await db.commit()
     return obj
 @router.delete('/{project_id}')
 async def delete_project(project_id: str, db: AsyncSession = Depends(get_db)):
     from app.models import Proyecto
     obj = await db.get(Proyecto, UUID(project_id))
     if not obj: raise HTTPException(404)
-    # 1. Borrar Repo en GitHub
-    await delete_repo(project_id, db)
-    # 2. Borrar Workspace físico
-    ws = settings.base_projects_dir / obj.nombre_slug
-    if ws.exists(): shutil.rmtree(ws)
-    # 3. Borrar de DB (Cascada asume borrar Mensajes y Archivos)
+    slug = obj.nombre_slug
+    tk = settings.github_personal_access_token
+    if tk and obj.github_url:
+        parts = obj.github_url.replace('.git', '').split('/')
+        if len(parts) >= 5:
+            owner, repo = parts[3], parts[4]
+            async with httpx.AsyncClient() as client:
+                headers = {'Authorization': f'token {tk}', 'Accept': 'application/vnd.github.v3+json'}
+                r = await client.delete(f'https://api.github.com/repos/{owner}/{repo}', headers=headers)
+                if r.status_code in [204, 404]:
+                    db.add(EventoAuditoria(actor='GitOps', action='Repo GitHub Eliminado', target=repo, severity='warning'))
+    ws = settings.base_projects_dir / slug
+    if ws.exists(): shutil.rmtree(ws, ignore_errors=True)
+    db.add(EventoAuditoria(actor='Sistema', action='Proyecto y Workspace Destruido', target=slug, severity='danger'))
     await db.delete(obj)
     await db.commit()
     return {'status': 'ok'}
@@ -73,7 +101,7 @@ async def read_file(project_id: str, file_path: str, db: AsyncSession = Depends(
     fp = Path(file_path)
     if not fp.is_file():
         fp = settings.base_projects_dir / p.nombre_slug / file_path.lstrip('./').lstrip('/')
-    if not fp.is_file(): return {'content': 'Archivo no leible o no existe.', 'is_image': False}
+    if not fp.is_file(): return {'content': 'Archivo no existe.', 'is_image': False}
     mime_type, _ = mimetypes.guess_type(str(fp))
     if mime_type and mime_type.startswith('image/'):
         with open(fp, 'rb') as f:
@@ -86,20 +114,22 @@ async def update_file(project_id: str, file_path: str, payload: FileUpdate, db: 
     from app.models import Proyecto
     p = await db.get(Proyecto, UUID(project_id))
     fp = Path(file_path)
-    if not fp.is_file():
-        fp = settings.base_projects_dir / p.nombre_slug / file_path.lstrip('./').lstrip('/')
+    if not fp.is_file(): fp = settings.base_projects_dir / p.nombre_slug / file_path.lstrip('./').lstrip('/')
     if not fp.is_file(): raise HTTPException(404, 'Archivo no encontrado')
     with open(fp, 'w', encoding='utf-8') as f: f.write(payload.content)
+    db.add(EventoAuditoria(actor='User', action='Archivo Editado', target=fp.name, severity='info'))
+    await db.commit()
     return {'status': 'ok'}
 @router.delete('/{project_id}/workspace/file')
 async def delete_file(project_id: str, file_path: str, db: AsyncSession = Depends(get_db)):
     from app.models import Proyecto
     p = await db.get(Proyecto, UUID(project_id))
     fp = Path(file_path)
-    if not fp.is_file():
-        fp = settings.base_projects_dir / p.nombre_slug / file_path.lstrip('./').lstrip('/')
+    if not fp.is_file(): fp = settings.base_projects_dir / p.nombre_slug / file_path.lstrip('./').lstrip('/')
     if not fp.is_file(): raise HTTPException(404, 'Archivo no encontrado')
     os.remove(fp)
+    db.add(EventoAuditoria(actor='User', action='Archivo Eliminado', target=fp.name, severity='warning'))
+    await db.commit()
     return {'status': 'ok'}
 @router.get('/{project_id}/workspace/tree')
 async def get_tree(project_id: str, db: AsyncSession = Depends(get_db)):
@@ -133,6 +163,7 @@ async def update_project(project_id: str, payload: dict, db: AsyncSession = Depe
     valid_keys = Proyecto.__table__.columns.keys()
     for k, v in payload.items():
         if k in valid_keys: setattr(obj, k, v)
+    db.add(EventoAuditoria(actor='User', action='Proyecto Actualizado', target=obj.nombre_slug, severity='info'))
     await db.commit()
     await db.refresh(obj)
     return obj

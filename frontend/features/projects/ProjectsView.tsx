@@ -20,7 +20,7 @@ export function ProjectsView() {
       <SectionHeader
         title="Proyectos"
         sprint="Sprint 1 · Gestión de proyectos"
-        description="Listado de iniciativas gobernadas por el orquestador. Si el backend aún no tiene datos, esta pantalla puede mostrar vacío o mocks según NEXT_PUBLIC_DATA_MODE."
+        description="Listado de iniciativas gobernadas por el orquestador. Si el backend aún no tiene datos, esta pantalla puede mostrar vacío ."
         action={<Link href="/projects/new"><Button>Nuevo proyecto</Button></Link>}
       />
       {projects.length === 0 ? (
