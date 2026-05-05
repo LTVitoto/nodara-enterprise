@@ -1,51 +1,25 @@
 import os
 from uuid import UUID
-import aiofiles
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, UploadFile, File
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from app.config import get_settings
 from app.database import get_db
-from app.schemas import ArchivoTemporalOut
-from app.services.filesystem_guard import safe_join
-
+from app.config import get_settings
+from app.models import ArchivoTemporal, Proyecto
 router = APIRouter()
 settings = get_settings()
-
-@router.get("/{proyecto_id}")
-async def list_files(proyecto_id: str, db: AsyncSession = Depends(get_db)):
-    from app.models import ArchivoTemporal
-    try:
-        p_id = UUID(proyecto_id)
-        result = await db.execute(select(ArchivoTemporal).where(ArchivoTemporal.proyecto_id == p_id).order_by(ArchivoTemporal.fecha_creacion.desc()))
-        return list(result.scalars().all())
-    except Exception:
-        return []
-
-@router.post("/{proyecto_id}/upload", response_model=ArchivoTemporalOut)
-async def upload_file(proyecto_id: str, file: UploadFile = File(...), db: AsyncSession = Depends(get_db)):
-    from app.models import ArchivoTemporal, Proyecto
-    p_id = UUID(proyecto_id)
-    proyecto = await db.get(Proyecto, p_id)
-    if not proyecto: raise HTTPException(status_code=404, detail="Proyecto no encontrado")
-
-    workspace = settings.base_projects_dir / proyecto.nombre_slug / "_uploads"
-    workspace.mkdir(parents=True, exist_ok=True)
-    target = safe_join(workspace, os.path.basename(file.filename or "archivo.bin"))
-
-    size = 0
-    async with aiofiles.open(target, "wb") as out:
-        while chunk := await file.read(1024 * 1024):
-            size += len(chunk)
-            await out.write(chunk)
-
-    obj = ArchivoTemporal(
-        proyecto_id=p_id, nombre_archivo=file.filename,
-        contenido_codigo="Archivo binario guardado en disco", version=1,
-        ruta_archivo=str(target), mime_type=file.content_type, size_bytes=size,
-    )
+@router.get('/{project_id}')
+async def list_files(project_id: str, db=Depends(get_db)):
+    res = await db.execute(select(ArchivoTemporal).where(ArchivoTemporal.proyecto_id == UUID(project_id)))
+    return list(res.scalars().all())
+@router.post('/{project_id}/upload')
+async def upload_file(project_id: str, file: UploadFile = File(...), db=Depends(get_db)):
+    p = await db.get(Proyecto, UUID(project_id))
+    ws = settings.base_projects_dir / p.nombre_slug / '_uploads'
+    ws.mkdir(parents=True, exist_ok=True)
+    target = ws / file.filename
+    content = await file.read()
+    with open(target, 'wb') as f: f.write(content)
+    obj = ArchivoTemporal(proyecto_id=UUID(project_id), nombre_archivo=file.filename, contenido_codigo='Binario', ruta_archivo=str(target), mime_type=file.content_type, size_bytes=len(content))
     db.add(obj)
     await db.commit()
-    await db.refresh(obj)
     return obj

@@ -1,207 +1,129 @@
 "use client";
-import { useEffect, useState } from "react";
-import { Badge } from "@/components/ui/Badge";
-import { Button } from "@/components/ui/Button";
-import { Card, CardTitle } from "@/components/ui/Card";
-import { SectionHeader } from "@/components/ui/SectionHeader";
-import { formatDate } from "@/lib/format";
-import { futureRepository, projectsRepository, githubRepository } from "@/services/repositories";
-import type { AgentDefinition, AuditEvent, ChatMessage, MetricCard, ToolDefinition, WorkspaceNode, Proyecto } from "@/types/domain";
-
-function ensureArray<T>(data: any): T[] { return Array.isArray(data) ? data : (Array.isArray(data?.data) ? data.data : []); }
-
-function ProjectSelector({ projects, projectId, setProjectId }: { projects: Proyecto[], projectId: string, setProjectId: (id: string) => void }) {
+import { useEffect, useState } from 'react';
+import { Badge } from '@/components/ui/Badge';
+import { Button } from '@/components/ui/Button';
+import { Card, CardTitle } from '@/components/ui/Card';
+import { SectionHeader } from '@/components/ui/SectionHeader';
+import { futureRepository, projectsRepository, githubRepository } from '@/services/repositories';
+function ProjectSelector({ projects, projectId, setProjectId }: any) {
     if (projects.length === 0) return null;
     return (
-        <div className="mb-6">
-            <label className="mr-4 font-bold text-sm">Seleccionar Proyecto:</label>
-            <select className="border border-brand-border bg-white text-brand-navy p-2 rounded-xl text-sm" value={projectId} onChange={(e) => setProjectId(e.target.value)}>
-                {projects.map(p => <option key={p.id} value={p.id}>{p.titulo}</option>)}
+        <div className='mb-6'>
+            <label className='mr-4 font-bold text-sm'>Seleccionar Proyecto:</label>
+            <select className='border border-brand-border bg-white p-2 rounded-xl text-sm' value={projectId} onChange={(e) => setProjectId(e.target.value)}>
+                {projects.map((p:any) => <option key={p.id} value={p.id}>{p.titulo}</option>)}
             </select>
         </div>
     );
 }
-
-export function MessagesView() {
-  const [items, setItems] = useState<ChatMessage[]>([]);
-  const [projects, setProjects] = useState<Proyecto[]>([]);
-  const [projectId, setProjectId] = useState<string>("");
-  const [loading, setLoading] = useState(true);
-
+export function AgentsView() {
+  const [projects, setProjects] = useState<any[]>([]);
+  const [projectId, setProjectId] = useState<string>('');
+  const [project, setProject] = useState<any>(null);
   useEffect(() => { projectsRepository.list().then(p => { setProjects(p); if(p.length > 0) setProjectId(p[0].id); }); }, []);
-  useEffect(() => {
-    if (projectId) {
-        setLoading(true);
-        futureRepository.messages(projectId).then(data => setItems(ensureArray<ChatMessage>(data))).finally(() => setLoading(false));
-    }
-  }, [projectId]);
-
+  useEffect(() => { if(projectId) projectsRepository.get(projectId).then(setProject); }, [projectId]);
   return (
     <div>
-      <SectionHeader title="Historial de mensajes" sprint="Sprint 2 · Contexto" description="Registro persistente del chat por proyecto." />
+      <SectionHeader title='Gestión de agentes' description='Roles activos según el proyecto seleccionado.' />
       <ProjectSelector projects={projects} projectId={projectId} setProjectId={setProjectId} />
-      {loading ? <p>Cargando...</p> : items.length === 0 ? <p>No hay mensajes en este proyecto.</p> : (
-        <div className="space-y-4">
-            {items.map((m) => (
-            <Card key={m.id}>
-                <Badge tone={m.remitente.toLowerCase() === "user" || m.remitente.toLowerCase() === "usuario" ? "info" : "success"}>{m.remitente}</Badge>
-                <p className="mt-3 text-sm text-brand-navy whitespace-pre-wrap">{m.contenido}</p>
-                <p className="mt-2 text-xs text-brand-muted">{formatDate(m.fecha_envio)}</p>
-            </Card>
-            ))}
+      {project && (
+        <div className='grid gap-5 xl:grid-cols-3'>
+          <Card><Badge tone='success'>Gemini</Badge><h3 className='mt-3 font-black text-xl'>Infraestructura</h3><p className='mt-2 text-sm text-brand-muted'>{project.rol_gemini}</p></Card>
+          <Card><Badge tone='success'>ChatGPT</Badge><h3 className='mt-3 font-black text-xl'>Backend y Datos</h3><p className='mt-2 text-sm text-brand-muted'>{project.rol_chatgpt}</p></Card>
+          <Card><Badge tone='success'>Claude</Badge><h3 className='mt-3 font-black text-xl'>Frontend y UX</h3><p className='mt-2 text-sm text-brand-muted'>{project.rol_claude}</p></Card>
         </div>
       )}
     </div>
   );
 }
-
-export function ToolsView() {
-  const [items, setItems] = useState<ToolDefinition[]>([]);
-  useEffect(() => { futureRepository.tools().then(data => setItems(ensureArray<ToolDefinition>(data))); }, []);
-
+function Tree({ nodes, depth = 0, onFileClick }: any) {
   return (
-    <div>
-      <SectionHeader title="Catálogo de tools" sprint="Sprint 2 · Tools" description="Lectura libre vs escritura con aprobación." />
-      <div className="grid gap-5 md:grid-cols-2">
-        {items.map((t) => (
-        <Card key={t.name}>
-            <Badge tone={t.requires_approval ? "warning" : "success"}>{t.requires_approval ? "requiere aprobación" : "lectura libre"}</Badge>
-            <h3 className="mt-3 text-lg font-black">{t.name}</h3>
-            <p className="mt-2 text-sm text-brand-muted">{t.description}</p>
-        </Card>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-export function AgentsView() {
-  const [items, setItems] = useState<AgentDefinition[]>([]);
-  useEffect(() => { futureRepository.agents().then(data => setItems(ensureArray<AgentDefinition>(data))); }, []);
-
-  return (
-    <div>
-      <SectionHeader title="Gestión de agentes" sprint="Sprint 3 · Agentes" description="Estado real de los agentes según API Keys cargadas." />
-      <div className="grid gap-5 xl:grid-cols-3">
-        {items.map((a) => (
-        <Card key={a.name}>
-            <Badge tone={a.status === "active" ? "success" : "danger"}>{a.status === "active" ? "API Key Activa" : "Sin API Key"}</Badge>
-            <h3 className="mt-3 text-xl font-black">{a.label}</h3>
-            <p className="mt-2 font-bold text-brand-navy">{a.role}</p>
-            <p className="mt-2 text-sm text-brand-muted">{a.responsibility}</p>
-        </Card>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-export function MetricsView() {
-  const [items, setItems] = useState<MetricCard[]>([]);
-  useEffect(() => { futureRepository.metrics().then(data => setItems(ensureArray<MetricCard>(data))); }, []);
-
-  return (
-    <div>
-      <SectionHeader title="Métricas, costos y uso" sprint="Sprint 3 · Observabilidad" description="Métricas leídas en tiempo real de PostgreSQL." />
-      <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-4">
-        {items.map((m, i) => (
-        <Card key={m?.label || i}>
-            <p className="text-sm font-bold text-brand-muted">{m?.label}</p>
-            <p className="mt-3 text-3xl font-black">{m?.value}</p>
-            <Badge tone={m?.tone || "info"} className="mt-4">{m?.trend}</Badge>
-        </Card>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function Tree({ nodes, depth = 0 }: { nodes: WorkspaceNode[]; depth?: number }) {
-  return (
-    <div className="space-y-2">
-      {(nodes || []).map((node) => (
-        <div key={node.id} style={{ marginLeft: depth * 18 }}>
-          <div className="rounded-2xl bg-brand-soft px-4 py-3 text-sm font-bold">
-            {node.type === "folder" ? "📁" : "📄"} {node.name}
+    <div className='space-y-1 mt-2'>
+      {nodes.map((node: any) => (
+        <div key={node.id} style={{ marginLeft: depth * 20 }}>
+          <div className={`px-2 py-1 text-sm rounded ${node.type === 'file' ? 'cursor-pointer hover:bg-brand-soft text-brand-cyan' : 'font-bold text-brand-navy'}`} onClick={() => node.type === 'file' && onFileClick(node.path)}>
+            {node.type === 'folder' ? '📁' : '📄'} {node.name}
           </div>
-          {node.children && node.children.length > 0 ? <Tree nodes={node.children} depth={depth + 1} /> : null}
+          {node.children && <Tree nodes={node.children} depth={depth + 1} onFileClick={onFileClick} />}
         </div>
       ))}
     </div>
   );
 }
-
 export function WorkspaceView() {
-  const [items, setItems] = useState<WorkspaceNode[]>([]);
-  const [projects, setProjects] = useState<Proyecto[]>([]);
-  const [projectId, setProjectId] = useState<string>("");
-
+  const [items, setItems] = useState<any[]>([]);
+  const [projects, setProjects] = useState<any[]>([]);
+  const [projectId, setProjectId] = useState<string>('');
+  const [fileContent, setFileContent] = useState<string>('');
   useEffect(() => { projectsRepository.list().then(p => { setProjects(p); if(p.length > 0) setProjectId(p[0].id); }); }, []);
-  useEffect(() => { if (projectId) futureRepository.workspace(projectId).then(data => setItems(ensureArray<WorkspaceNode>(data))); }, [projectId]);
-
+  useEffect(() => { if (projectId) { futureRepository.workspace(projectId).then(setItems); setFileContent(''); } }, [projectId]);
+  const handleFileClick = async (path: string) => {
+      const res = await futureRepository.workspaceFile(projectId, path);
+      setFileContent(res?.content || 'No se pudo leer el archivo.');
+  };
   return (
     <div>
-      <SectionHeader title="Workspace / File Explorer" sprint="Sprint 3 · Filesystem" description="Lectura en tiempo real del directorio del proyecto en el servidor." />
+      <SectionHeader title='Workspace' description='Haz clic en un archivo para visualizarlo.' />
       <ProjectSelector projects={projects} projectId={projectId} setProjectId={setProjectId} />
-      <Card>
-        <CardTitle eyebrow="Árbol" title="Estructura física del proyecto" />
-        {items.length === 0 ? <p className="text-sm text-brand-muted">Carpeta de proyecto no encontrada o vacía.</p> : <Tree nodes={items} />}
-      </Card>
+      <div className='grid xl:grid-cols-[300px_1fr] gap-6'>
+        <Card>
+          <CardTitle title='Explorador' />
+          <Tree nodes={items} onFileClick={handleFileClick} />
+        </Card>
+        <Card>
+           <CardTitle title='Visualizador' />
+           <pre className='mt-4 p-4 bg-brand-deep text-brand-bright text-xs rounded-xl overflow-auto max-h-[600px]'>{fileContent || 'Selecciona un archivo del explorador.'}</pre>
+        </Card>
+      </div>
     </div>
   );
 }
-
 export function GithubView() {
-  const [projects, setProjects] = useState<Proyecto[]>([]);
-  const [projectId, setProjectId] = useState<string>("");
-  const [output, setOutput] = useState<string>("Selecciona un proyecto y ejecuta una acción de Git.");
-
+  const [projects, setProjects] = useState<any[]>([]);
+  const [projectId, setProjectId] = useState<string>('');
+  const [output, setOutput] = useState<string>('');
   useEffect(() => { projectsRepository.list().then(p => { setProjects(p); if(p.length > 0) setProjectId(p[0].id); }); }, []);
-
   const runCmd = async (action: 'status' | 'add' | 'commit' | 'push') => {
-      setOutput("Ejecutando...");
+      setOutput('Ejecutando...');
       try {
           const res = await githubRepository[action](projectId);
-          setOutput(res?.output || "Comando ejecutado con éxito.");
-      } catch (e) {
-          setOutput("Error ejecutando el comando.");
-      }
+          setOutput(res?.output || 'Comando ejecutado con éxito.');
+      } catch (e) { setOutput('Error ejecutando el comando.'); }
   };
-
   return (
     <div>
-      <SectionHeader title="Integración GitHub" sprint="Sprint 4 · GitOps" description="Control de versiones directo sobre el directorio del proyecto." />
+      <SectionHeader title='GitOps' description='Control de versiones.' />
       <ProjectSelector projects={projects} projectId={projectId} setProjectId={setProjectId} />
       <Card>
-        <CardTitle eyebrow="Acciones" title="Comandos Locales Git" />
-        <div className="flex gap-2 mb-4">
-            <Button variant="secondary" onClick={() => runCmd('status')}>Git Status</Button>
-            <Button variant="secondary" onClick={() => runCmd('add')}>Git Add .</Button>
-            <Button variant="secondary" onClick={() => runCmd('commit')}>Git Commit</Button>
+        <div className='flex gap-2 mb-4'>
+            <Button variant='secondary' onClick={() => runCmd('status')}>Git Status</Button>
+            <Button variant='secondary' onClick={() => runCmd('add')}>Git Add</Button>
+            <Button variant='secondary' onClick={() => runCmd('commit')}>Git Commit</Button>
             <Button onClick={() => runCmd('push')}>Git Push</Button>
         </div>
-        <pre className="bg-brand-deep text-brand-bright p-4 rounded-xl text-sm whitespace-pre-wrap">{output}</pre>
+        <pre className='bg-brand-deep text-brand-bright p-4 rounded-xl text-sm whitespace-pre-wrap'>{output}</pre>
       </Card>
     </div>
   );
 }
-
-export function AuditView() {
-  const [items, setItems] = useState<AuditEvent[]>([]);
-  useEffect(() => { futureRepository.audit().then(data => setItems(ensureArray<AuditEvent>(data))); }, []);
-
+export function MetricsView() {
+  const [items, setItems] = useState<any[]>([]);
+  useEffect(() => { futureRepository.metrics().then(setItems); }, []);
   return (
     <div>
-      <SectionHeader title="Auditoría enterprise" sprint="Sprint 4 · Governance" description="Trazabilidad completa de operaciones críticas." />
-      <div className="space-y-4">
-        {items.map((a) => (
-        <Card key={a.id}>
-            <Badge tone={a.severity}>{a.severity}</Badge>
-            <h3 className="mt-3 font-black">{a.action}</h3>
-            <p className="mt-1 text-sm text-brand-muted">{a.actor} · {a.target} · {formatDate(a.timestamp)}</p>
+      <SectionHeader title='Métricas' description='Dashboard.' />
+      <div className='grid gap-5 md:grid-cols-3'>
+        {items.map((m, i) => (
+        <Card key={i}>
+            <p className='text-sm font-bold text-brand-muted'>{m.label}</p>
+            <p className='mt-3 text-3xl font-black'>{m.value}</p>
+            <Badge tone={m.tone} className='mt-4'>{m.trend}</Badge>
         </Card>
         ))}
       </div>
     </div>
   );
 }
+export function AuditView() { return <div><SectionHeader title='Auditoría' description='Logs' /></div>; }
+export function ToolsView() { return <div><SectionHeader title='Tools' description='Catálogo' /></div>; }
+export function MessagesView() { return <div><SectionHeader title='Mensajes' description='Historial' /></div>; }

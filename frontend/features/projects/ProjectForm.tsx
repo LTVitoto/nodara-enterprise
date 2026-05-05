@@ -40,9 +40,17 @@ export function ProjectForm() {
     }
   }
 
+
   function set<K extends keyof ProyectoCreate>(key: K, value: ProyectoCreate[K]) {
     setPayload((prev) => ({ ...prev, [key]: value }));
   }
+
+  const handleTituloChange = (val: string) => {
+    set("titulo", val);
+    const slug = val.toLowerCase().trim().replace(/ /g, '-').replace(/[^\w-]+/g, '');
+    set("github_url", `https://github.com/LTVitoto/${slug}.git`);
+  };
+
 
   return (
     <div>
@@ -52,7 +60,7 @@ export function ProjectForm() {
         <form onSubmit={submit} className="grid gap-5">
           <div className="grid gap-5 md:grid-cols-2">
             <label className="grid gap-2 text-sm font-bold">Título (Nombre de la carpeta)
-              <input required className="rounded-2xl border border-brand-border p-3" value={payload.titulo} onChange={(e) => set("titulo", e.target.value)} placeholder="Ej: NODARA Enterprise" />
+              <input required className="rounded-2xl border border-brand-border p-3" value={payload.titulo} onChange={(e) => handleTituloChange(e.target.value)} placeholder="Ej: NODARA Enterprise" />
             </label>
             <label className="grid gap-2 text-sm font-bold">Responsable
               <input required className="rounded-2xl border border-brand-cyan/50 p-3 bg-brand-soft" value={payload.responsable || ""} onChange={(e) => set("responsable", e.target.value)} />
