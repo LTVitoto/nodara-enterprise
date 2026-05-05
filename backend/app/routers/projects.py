@@ -1,4 +1,4 @@
-import os, subprocess, base64, mimetypes
+import os, subprocess, base64, mimetypes, shutil
 from uuid import UUID
 from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException
@@ -9,9 +9,11 @@ from app.database import get_db
 from app.config import get_settings
 from app.schemas import ProyectoCreate, ProyectoOut
 from app.services.slug import slugify
+from app.routers.github import delete_repo
 router = APIRouter()
 settings = get_settings()
 class ReadmeUpdate(BaseModel): content: str
+class FileUpdate(BaseModel): content: str
 @router.get('', response_model=list[ProyectoOut])
 async def list_projects(db: AsyncSession = Depends(get_db)):
     from app.models import Proyecto
@@ -23,10 +25,7 @@ async def create_project(payload: ProyectoCreate, db: AsyncSession = Depends(get
     slug = payload.nombre_slug or slugify(payload.titulo)
     data = payload.model_dump()
     valid_keys = Proyecto.__table__.columns.keys()
-    
-    # 🎯 FIX DEFINITIVO: Evitamos explícitamente el duplicate keyword argument
     filtered_data = {k: v for k, v in data.items() if k in valid_keys and k != 'nombre_slug'}
-    
     obj = Proyecto(**filtered_data, nombre_slug=slug)
     db.add(obj)
     await db.commit()
@@ -38,6 +37,20 @@ async def create_project(payload: ProyectoCreate, db: AsyncSession = Depends(get
             f.write('# ' + obj.titulo + '\n\n' + obj.descripcion)
     except: pass
     return obj
+@router.delete('/{project_id}')
+async def delete_project(project_id: str, db: AsyncSession = Depends(get_db)):
+    from app.models import Proyecto
+    obj = await db.get(Proyecto, UUID(project_id))
+    if not obj: raise HTTPException(404)
+    # 1. Borrar Repo en GitHub
+    await delete_repo(project_id, db)
+    # 2. Borrar Workspace físico
+    ws = settings.base_projects_dir / obj.nombre_slug
+    if ws.exists(): shutil.rmtree(ws)
+    # 3. Borrar de DB (Cascada asume borrar Mensajes y Archivos)
+    await db.delete(obj)
+    await db.commit()
+    return {'status': 'ok'}
 @router.get('/{project_id}/readme')
 async def get_readme(project_id: str, db: AsyncSession = Depends(get_db)):
     from app.models import Proyecto
@@ -68,6 +81,26 @@ async def read_file(project_id: str, file_path: str, db: AsyncSession = Depends(
             return {'content': f'data:{mime_type};base64,{b64}', 'is_image': True}
     with open(fp, 'r', encoding='utf-8', errors='replace') as f: 
         return {'content': f.read(), 'is_image': False}
+@router.put('/{project_id}/workspace/file')
+async def update_file(project_id: str, file_path: str, payload: FileUpdate, db: AsyncSession = Depends(get_db)):
+    from app.models import Proyecto
+    p = await db.get(Proyecto, UUID(project_id))
+    fp = Path(file_path)
+    if not fp.is_file():
+        fp = settings.base_projects_dir / p.nombre_slug / file_path.lstrip('./').lstrip('/')
+    if not fp.is_file(): raise HTTPException(404, 'Archivo no encontrado')
+    with open(fp, 'w', encoding='utf-8') as f: f.write(payload.content)
+    return {'status': 'ok'}
+@router.delete('/{project_id}/workspace/file')
+async def delete_file(project_id: str, file_path: str, db: AsyncSession = Depends(get_db)):
+    from app.models import Proyecto
+    p = await db.get(Proyecto, UUID(project_id))
+    fp = Path(file_path)
+    if not fp.is_file():
+        fp = settings.base_projects_dir / p.nombre_slug / file_path.lstrip('./').lstrip('/')
+    if not fp.is_file(): raise HTTPException(404, 'Archivo no encontrado')
+    os.remove(fp)
+    return {'status': 'ok'}
 @router.get('/{project_id}/workspace/tree')
 async def get_tree(project_id: str, db: AsyncSession = Depends(get_db)):
     from app.models import Proyecto

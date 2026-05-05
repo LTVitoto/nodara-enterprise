@@ -1,99 +1,41 @@
 "use client";
-
-import { useState } from "react";
-import { useRouter } from "next/navigation";
-import { Button } from "@/components/ui/Button";
-import { Card, CardTitle } from "@/components/ui/Card";
-import { SectionHeader } from "@/components/ui/SectionHeader";
-import { projectsRepository } from "@/services/repositories";
-import type { ProyectoCreate } from "@/types/domain";
-
-const defaultProject: ProyectoCreate = {
-  titulo: "",
-  descripcion: "",
-  anio: new Date().getFullYear(),
-  tecnologias: { backend: "FastAPI", frontend: "Next.js" },
-  microservicios: { db: "orquestador_db" },
-  instrucciones_deploy: "docker compose up -d",
-  github_url: "",
-  rol_gemini: "Experto en Infraestructura y Contenedores",
-  rol_chatgpt: "Experto en Arquitectura Backend",
-  rol_claude: "Experto en UX y Frontend",
-  estado: "activo",
-  responsable: "Vitoto"
-};
-
+import { useState } from 'react';
+import { useRouter } from 'next/navigation';
+import { Button } from '@/components/ui/Button';
+import { SectionHeader } from '@/components/ui/SectionHeader';
+import { projectsRepository } from '@/services/repositories';
 export function ProjectForm() {
   const router = useRouter();
-  const [payload, setPayload] = useState<ProyectoCreate>(defaultProject);
-  const [saving, setSaving] = useState(false);
-
-  async function submit(event: React.FormEvent) {
-    event.preventDefault();
-    setSaving(true);
-    try {
-        const created = await projectsRepository.create(payload);
-        router.push(`/projects/${created.id}`);
-    } catch(e) {
-        console.error("Error creando proyecto", e);
-        setSaving(false);
-    }
-  }
-
-
-  function set<K extends keyof ProyectoCreate>(key: K, value: ProyectoCreate[K]) {
-    setPayload((prev) => ({ ...prev, [key]: value }));
-  }
-
-  const handleTituloChange = (val: string) => {
-    set("titulo", val);
-    const slug = val.toLowerCase().trim().replace(/ /g, '-').replace(/[^\w-]+/g, '');
-    set("github_url", `https://github.com/LTVitoto/${slug}.git`);
+  const [form, setForm] = useState({ titulo: '', responsable: '', descripcion: '', github_url: '', anio: new Date().getFullYear(), rol_gemini: 'Experto Infra, FullStack', rol_chatgpt: 'Experto Backend y Datos', rol_claude: 'Experto Frontend y UX', estado: 'privado' });
+  const submit = async (e: any) => {
+    e.preventDefault();
+    const p = await projectsRepository.create(form);
+    if(p && p.id) router.push(`/projects/${p.id}`);
   };
-
-
   return (
-    <div>
-      <SectionHeader title="Crear proyecto" description="Registra una nueva iniciativa. La carpeta física y el repositorio Git se crearán automáticamente." />
-      <Card>
-        <CardTitle eyebrow="SETUP" title="Datos base del proyecto" />
-        <form onSubmit={submit} className="grid gap-5">
-          <div className="grid gap-5 md:grid-cols-2">
-            <label className="grid gap-2 text-sm font-bold">Título (Nombre de la carpeta)
-              <input required className="rounded-2xl border border-brand-border p-3" value={payload.titulo} onChange={(e) => handleTituloChange(e.target.value)} placeholder="Ej: NODARA Enterprise" />
-            </label>
-            <label className="grid gap-2 text-sm font-bold">Responsable
-              <input required className="rounded-2xl border border-brand-cyan/50 p-3 bg-brand-soft" value={payload.responsable || ""} onChange={(e) => set("responsable", e.target.value)} />
-            </label>
+    <form onSubmit={submit} className='max-w-2xl space-y-6'>
+      <SectionHeader title='Crear proyecto' description='Registra una nueva iniciativa.' />
+      <div className='p-6 bg-white rounded-3xl shadow-sm border space-y-4'>
+        <h3 className='font-black text-brand-navy'>Datos base</h3>
+        <div><label className='block text-xs font-bold text-brand-muted uppercase mb-1'>Título</label><input className='w-full border rounded-xl p-3 text-sm' value={form.titulo} onChange={e => setForm({...form, titulo: e.target.value})} required /></div>
+        <div><label className='block text-xs font-bold text-brand-muted uppercase mb-1'>Responsable</label><input className='w-full border rounded-xl p-3 text-sm' value={form.responsable} onChange={e => setForm({...form, responsable: e.target.value})} required /></div>
+        <div><label className='block text-xs font-bold text-brand-muted uppercase mb-1'>Descripción</label><textarea className='w-full border rounded-xl p-3 text-sm min-h-[100px]' value={form.descripcion} onChange={e => setForm({...form, descripcion: e.target.value})} required /></div>
+        <div className='grid grid-cols-2 gap-4'>
+          <div><label className='block text-xs font-bold text-brand-muted uppercase mb-1'>GitHub URL</label><input className='w-full border rounded-xl p-3 text-sm' value={form.github_url} onChange={e => setForm({...form, github_url: e.target.value})} /></div>
+          <div>
+            <label className='block text-xs font-bold text-brand-muted uppercase mb-1'>Privacidad GitOps</label>
+            <select className='w-full border rounded-xl p-3 text-sm' value={form.estado} onChange={e => setForm({...form, estado: e.target.value})}>
+              <option value='privado'>Privado</option>
+              <option value='publico'>Público</option>
+            </select>
           </div>
-          
-          <label className="grid gap-2 text-sm font-bold">Descripción (Contexto para la IA)
-            <textarea required className="min-h-28 rounded-2xl border border-brand-border p-3" value={payload.descripcion || ""} onChange={(e) => set("descripcion", e.target.value)} placeholder="Describe de qué trata el proyecto para que la IA entienda el contexto..." />
-          </label>
-          
-          <div className="grid gap-5 md:grid-cols-2">
-            <label className="grid gap-2 text-sm font-bold">GitHub URL (Opcional - GitOps Auto)
-              <input className="rounded-2xl border border-brand-border p-3" value={payload.github_url || ""} onChange={(e) => set("github_url", e.target.value || null)} placeholder="https://github.com/LTVitoto/repo.git"/>
-            </label>
-            <label className="grid gap-2 text-sm font-bold">Año
-              <input type="number" className="rounded-2xl border border-brand-border p-3" value={payload.anio} onChange={(e) => set("anio", Number(e.target.value))} />
-            </label>
-          </div>
-          
-          <div className="grid gap-5 md:grid-cols-3">
-            <label className="grid gap-2 text-sm font-bold">Rol Gemini
-              <textarea className="min-h-24 rounded-2xl border border-brand-border p-3 text-xs" value={payload.rol_gemini || ""} onChange={(e) => set("rol_gemini", e.target.value)} />
-            </label>
-            <label className="grid gap-2 text-sm font-bold">Rol ChatGPT
-              <textarea className="min-h-24 rounded-2xl border border-brand-border p-3 text-xs" value={payload.rol_chatgpt || ""} onChange={(e) => set("rol_chatgpt", e.target.value)} />
-            </label>
-            <label className="grid gap-2 text-sm font-bold">Rol Claude
-              <textarea className="min-h-24 rounded-2xl border border-brand-border p-3 text-xs" value={payload.rol_claude || ""} onChange={(e) => set("rol_claude", e.target.value)} />
-            </label>
-          </div>
-          <Button disabled={saving} className="justify-self-start mt-2">{saving ? "Creando Entorno..." : "Crear proyecto"}</Button>
-        </form>
-      </Card>
-    </div>
+        </div>
+        <h3 className='font-black text-brand-navy mt-6'>Roles Multi-Agente</h3>
+        <div><label className='block text-xs font-bold text-brand-muted uppercase mb-1'>Rol Gemini</label><input className='w-full border rounded-xl p-3 text-sm' value={form.rol_gemini} onChange={e => setForm({...form, rol_gemini: e.target.value})} /></div>
+        <div><label className='block text-xs font-bold text-brand-muted uppercase mb-1'>Rol ChatGPT</label><input className='w-full border rounded-xl p-3 text-sm' value={form.rol_chatgpt} onChange={e => setForm({...form, rol_chatgpt: e.target.value})} /></div>
+        <div><label className='block text-xs font-bold text-brand-muted uppercase mb-1'>Rol Claude</label><input className='w-full border rounded-xl p-3 text-sm' value={form.rol_claude} onChange={e => setForm({...form, rol_claude: e.target.value})} /></div>
+        <Button type='submit' className='w-full mt-4'>Crear proyecto</Button>
+      </div>
+    </form>
   );
 }
