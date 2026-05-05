@@ -1,16 +1,16 @@
--- /orquestador-multi-agente/postgres_init/initdb.sql
-
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
 CREATE TABLE IF NOT EXISTS Usuarios_Config (
     id SERIAL PRIMARY KEY,
     derivar_en_problemas BOOLEAN DEFAULT FALSE,
-    auto_aprobar_ejecucion BOOLEAN DEFAULT FALSE, -- Control Dev vs Prod
+    auto_aprobar_ejecucion BOOLEAN DEFAULT FALSE,
     saldo_virtual_openai NUMERIC(10,4) DEFAULT 0.0000,
     saldo_virtual_anthropic NUMERIC(10,4) DEFAULT 0.0000,
+    saldo_virtual_gemini NUMERIC(10,4) DEFAULT 0.0000,
     api_key_openai VARCHAR(255),
     api_key_anthropic VARCHAR(255),
-    api_key_gemini VARCHAR(255)
+    api_key_gemini VARCHAR(255),
+    api_key_github VARCHAR(255)
 );
 
 CREATE TABLE IF NOT EXISTS Proyectos (
@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS Proyectos (
     titulo VARCHAR(150) NOT NULL,
     anio INTEGER NOT NULL,
     descripcion TEXT NOT NULL,
+    responsable VARCHAR(255),
     tecnologias JSONB NOT NULL DEFAULT '[]',
     microservicios JSONB NOT NULL DEFAULT '[]',
     instrucciones_deploy TEXT,
@@ -26,8 +27,9 @@ CREATE TABLE IF NOT EXISTS Proyectos (
     rol_gemini TEXT NOT NULL,
     rol_chatgpt TEXT NOT NULL,
     rol_claude TEXT NOT NULL,
-    estado VARCHAR(20) DEFAULT 'Activo',
-    fecha_creacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    estado VARCHAR(20) DEFAULT 'privado',
+    fecha_creacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    fecha_actualizacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS Mensajes_Historial (
@@ -47,20 +49,23 @@ CREATE TABLE IF NOT EXISTS Archivos_Temporales (
     proyecto_id UUID REFERENCES Proyectos(id) ON DELETE CASCADE,
     nombre_archivo VARCHAR(255) NOT NULL,
     contenido_codigo TEXT NOT NULL,
+    ruta_archivo TEXT,
+    mime_type VARCHAR(120),
+    size_bytes INTEGER,
     version INTEGER DEFAULT 1,
     fecha_creacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS Eventos_Auditoria (
+    id SERIAL PRIMARY KEY,
+    actor VARCHAR(255) NOT NULL,
+    action VARCHAR(255) NOT NULL,
+    target VARCHAR(255) NOT NULL,
+    severity VARCHAR(50) DEFAULT 'info',
+    fecha_evento TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 -- INSERCIÓN SEGURA (IDEMPOTENTE)
 INSERT INTO Usuarios_Config (derivar_en_problemas, auto_aprobar_ejecucion) 
 SELECT TRUE, TRUE 
 WHERE NOT EXISTS (SELECT 1 FROM Usuarios_Config LIMIT 1);
-
-CREATE TABLE IF NOT EXISTS Eventos_Auditoria (
-    id SERIAL PRIMARY KEY,
-    actor VARCHAR(255),
-    action VARCHAR(255),
-    target VARCHAR(255),
-    severity VARCHAR(50) DEFAULT 'info',
-    fecha_evento TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);

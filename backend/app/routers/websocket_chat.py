@@ -1,33 +1,25 @@
-from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
-from uuid import UUID
-import logging
-from app.services.orchestrator import run_orchestrator
-
-logger = logging.getLogger("websocket")
+import json
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends
+from sqlalchemy.ext.asyncio import AsyncSession
+from app.database import get_db
+from app.models.audit import EventoAuditoria
 router = APIRouter()
-
-@router.websocket("/ws/chat/{proyecto_id}")
-async def websocket_chat(
-    websocket: WebSocket,
-    proyecto_id: UUID,
-    usuario_config_id: int = Query(default=1),
-):
+@router.websocket('/ws/chat/{project_id}')
+async def websocket_endpoint(websocket: WebSocket, project_id: str, db: AsyncSession = Depends(get_db)):
     await websocket.accept()
-    logger.info(f"WS Handshake aceptado | Proyecto: {proyecto_id}")
+    try:
+        audit = EventoAuditoria(actor='User', action='Inicio conversación', target=str(project_id)[:8]+'...', severity='info')
+        db.add(audit)
+        await db.commit()
+    except: pass
     try:
         while True:
-            payload = await websocket.receive_json()
-            message = payload.get("message") or payload.get("content")
-            correlation_id = payload.get("correlation_id", "req-000")
-
-            if not message:
-                await websocket.send_json({"event": "error", "data": {"message": "Payload inválido"}})
-                continue
-
-            # Delegamos al Orquestador Funcional inyectando los parámetros validados
-            await run_orchestrator(websocket, str(proyecto_id), usuario_config_id, payload)
-            
+            data = await websocket.receive_text()
+            payload = json.loads(data) if data.startswith('{') else {'message': data}
+            msg = payload.get('message', data)
+            audit_msg = EventoAuditoria(actor='User', action='Mensaje Enviado', target=str(project_id)[:8]+'...', severity='success')
+            db.add(audit_msg)
+            await db.commit()
+            await websocket.send_text(json.dumps({'event': 'message', 'data': {'agent': 'Orquestador', 'message': f'Mensaje procesado: {msg}'}}))
     except WebSocketDisconnect:
-        logger.info(f"WS Desconectado | Proyecto: {proyecto_id}")
-    except Exception as e:
-        logger.error(f"Error crítico en capa WS: {e}")
+        pass

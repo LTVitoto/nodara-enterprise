@@ -38,10 +38,13 @@ async def create_project(payload: ProyectoCreate, db: AsyncSession = Depends(get
             f.write('# ' + obj.titulo + '\n\n' + obj.descripcion)
         tk = settings.github_personal_access_token
         if tk and obj.github_url:
+            repo_name = obj.github_url.split('/')[-1].replace('.git', '')
             is_private = obj.estado != 'publico'
             async with httpx.AsyncClient() as client:
-                headers = {'Authorization': f'token {tk}', 'Accept': 'application/vnd.github.v3+json'}
-                r = await client.post('https://api.github.com/user/repos', headers=headers, json={'name': slug, 'private': is_private, 'description': obj.descripcion})
+                headers = {'Authorization': f'Bearer {tk}', 'Accept': 'application/vnd.github.v3+json', 'User-Agent': 'Nodara-Enterprise'}
+                api_res = await client.post('https://api.github.com/user/repos', headers=headers, json={'name': repo_name, 'private': is_private, 'description': obj.descripcion})
+                if api_res.status_code not in [200, 201, 422]:
+                    db.add(EventoAuditoria(actor='GitOps', action=f'Aviso GitHub API: {api_res.status_code}', target=repo_name, severity='warning'))
             subprocess.run(['git', 'init'], cwd=str(ws))
             subprocess.run(['git', 'add', '.'], cwd=str(ws))
             subprocess.run(['git', 'config', 'user.email', 'bot@nodara.local'], cwd=str(ws))
@@ -51,31 +54,23 @@ async def create_project(payload: ProyectoCreate, db: AsyncSession = Depends(get
             subprocess.run(['git', 'branch', '-M', 'main'], cwd=str(ws))
             subprocess.run(['git', 'remote', 'add', 'origin', auth], cwd=str(ws))
             subprocess.run(['git', 'push', '-u', 'origin', 'main'], cwd=str(ws))
-            db.add(EventoAuditoria(actor='GitOps', action='Workspace y Repo Creado', target=slug, severity='success'))
+            db.add(EventoAuditoria(actor='GitOps', action='Workspace y Repo Creado', target=repo_name, severity='success'))
             await db.commit()
     except Exception as e:
-        db.add(EventoAuditoria(actor='Sistema', action=f'Error GitOps: {str(e)}', target=slug, severity='danger'))
+        db.add(EventoAuditoria(actor='Sistema', action=f'Error GitOps: {str(e)[:50]}', target=slug, severity='danger'))
         await db.commit()
     return obj
 @router.delete('/{project_id}')
 async def delete_project(project_id: str, db: AsyncSession = Depends(get_db)):
     from app.models import Proyecto
+    from app.routers.github import delete_repo
     obj = await db.get(Proyecto, UUID(project_id))
     if not obj: raise HTTPException(404)
     slug = obj.nombre_slug
-    tk = settings.github_personal_access_token
-    if tk and obj.github_url:
-        parts = obj.github_url.replace('.git', '').split('/')
-        if len(parts) >= 5:
-            owner, repo = parts[3], parts[4]
-            async with httpx.AsyncClient() as client:
-                headers = {'Authorization': f'token {tk}', 'Accept': 'application/vnd.github.v3+json'}
-                r = await client.delete(f'https://api.github.com/repos/{owner}/{repo}', headers=headers)
-                if r.status_code in [204, 404]:
-                    db.add(EventoAuditoria(actor='GitOps', action='Repo GitHub Eliminado', target=repo, severity='warning'))
+    await delete_repo(project_id, db)
     ws = settings.base_projects_dir / slug
     if ws.exists(): shutil.rmtree(ws, ignore_errors=True)
-    db.add(EventoAuditoria(actor='Sistema', action='Proyecto y Workspace Destruido', target=slug, severity='danger'))
+    db.add(EventoAuditoria(actor='Sistema', action='Proyecto Destruido', target=slug, severity='danger'))
     await db.delete(obj)
     await db.commit()
     return {'status': 'ok'}
