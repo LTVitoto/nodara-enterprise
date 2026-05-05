@@ -43,8 +43,14 @@ async def create_project(payload: ProyectoCreate, db: AsyncSession = Depends(get
             async with httpx.AsyncClient() as client:
                 headers = {'Authorization': f'Bearer {tk}', 'Accept': 'application/vnd.github.v3+json', 'User-Agent': 'Nodara-Enterprise'}
                 api_res = await client.post('https://api.github.com/user/repos', headers=headers, json={'name': repo_name, 'private': is_private, 'description': obj.descripcion})
-                if api_res.status_code not in [200, 201, 422]:
-                    db.add(EventoAuditoria(actor='GitOps', action=f'Aviso GitHub API: {api_res.status_code}', target=repo_name, severity='warning'))
+                if api_res.status_code in [200, 201]:
+                    db.add(EventoAuditoria(actor='GitOps', action='Repo Creado en GitHub', target=repo_name, severity='success'))
+                else:
+                    error_msg = api_res.json().get('message', str(api_res.status_code)) if api_res.text else str(api_res.status_code)
+                    db.add(EventoAuditoria(actor='GitOps', action=f'GitHub rechazó creación: {error_msg[:100]}', target=repo_name, severity='danger'))
+                    await db.commit()
+                    return obj # Evita intentar hacer push a un repo que no se creó
+            # Setup local Git
             subprocess.run(['git', 'init'], cwd=str(ws))
             subprocess.run(['git', 'add', '.'], cwd=str(ws))
             subprocess.run(['git', 'config', 'user.email', 'bot@nodara.local'], cwd=str(ws))
@@ -53,11 +59,14 @@ async def create_project(payload: ProyectoCreate, db: AsyncSession = Depends(get
             auth = obj.github_url.replace('https://', f'https://{tk}@')
             subprocess.run(['git', 'branch', '-M', 'main'], cwd=str(ws))
             subprocess.run(['git', 'remote', 'add', 'origin', auth], cwd=str(ws))
-            subprocess.run(['git', 'push', '-u', 'origin', 'main'], cwd=str(ws))
-            db.add(EventoAuditoria(actor='GitOps', action='Workspace y Repo Creado', target=repo_name, severity='success'))
+            push_res = subprocess.run(['git', 'push', '-u', 'origin', 'main'], cwd=str(ws), capture_output=True, text=True)
+            if push_res.returncode == 0:
+                db.add(EventoAuditoria(actor='GitOps', action='Workspace Sincronizado a GitHub', target=repo_name, severity='success'))
+            else:
+                db.add(EventoAuditoria(actor='GitOps', action=f'Error de Push: {push_res.stderr[:100]}', target=repo_name, severity='danger'))
             await db.commit()
     except Exception as e:
-        db.add(EventoAuditoria(actor='Sistema', action=f'Error GitOps: {str(e)[:50]}', target=slug, severity='danger'))
+        db.add(EventoAuditoria(actor='Sistema', action=f'Excepción Fatal GitOps: {str(e)[:100]}', target=slug, severity='danger'))
         await db.commit()
     return obj
 @router.delete('/{project_id}')
@@ -67,10 +76,13 @@ async def delete_project(project_id: str, db: AsyncSession = Depends(get_db)):
     obj = await db.get(Proyecto, UUID(project_id))
     if not obj: raise HTTPException(404)
     slug = obj.nombre_slug
-    await delete_repo(project_id, db)
+    try:
+        await delete_repo(project_id, db)
+    except Exception as e:
+        db.add(EventoAuditoria(actor='Sistema', action=f'Error borrando repo Github: {str(e)[:50]}', target=slug, severity='warning'))
     ws = settings.base_projects_dir / slug
     if ws.exists(): shutil.rmtree(ws, ignore_errors=True)
-    db.add(EventoAuditoria(actor='Sistema', action='Proyecto Destruido', target=slug, severity='danger'))
+    db.add(EventoAuditoria(actor='Sistema', action='Proyecto y Workspace Destruido', target=slug, severity='danger'))
     await db.delete(obj)
     await db.commit()
     return {'status': 'ok'}

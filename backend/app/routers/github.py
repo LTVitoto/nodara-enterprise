@@ -38,15 +38,20 @@ async def git_push(project_id: str, db=Depends(get_db)):
     if not tk or not p.github_url: return {'output': 'Error: GitOps sin configurar.'}
     repo_name = p.github_url.split('/')[-1].replace('.git', '')
     is_private = p.estado != 'publico'
-    async with httpx.AsyncClient() as client:
-        headers = {'Authorization': f'Bearer {tk}', 'Accept': 'application/vnd.github.v3+json', 'User-Agent': 'Nodara-Enterprise'}
-        await client.post('https://api.github.com/user/repos', headers=headers, json={'name': repo_name, 'private': is_private, 'description': p.descripcion})
+    try:
+        async with httpx.AsyncClient() as client:
+            headers = {'Authorization': f'Bearer {tk}', 'Accept': 'application/vnd.github.v3+json', 'User-Agent': 'Nodara-Enterprise'}
+            await client.post('https://api.github.com/user/repos', headers=headers, json={'name': repo_name, 'private': is_private, 'description': p.descripcion})
+    except Exception as e:
+        pass # Ignoramos si ya existe o falla en push manual, intentamos el push igual
     auth = p.github_url.replace('https://', f'https://{tk}@')
     subprocess.run(['git', 'branch', '-M', 'main'], cwd=cwd)
     res = subprocess.run(['git', 'push', auth, 'main'], cwd=cwd, capture_output=True, text=True)
     if res.returncode == 0:
-        db.add(EventoAuditoria(actor='Sistema', action='Git Push Manual', target=repo_name, severity='success'))
-        await db.commit()
+        db.add(EventoAuditoria(actor='Sistema', action='Git Push Manual Exitoso', target=repo_name, severity='success'))
+    else:
+        db.add(EventoAuditoria(actor='Sistema', action='Git Push Manual Fallido', target=repo_name, severity='danger'))
+    await db.commit()
     return {'output': f'Push ejecutado:\n{res.stdout or res.stderr}'}
 @router.delete('/{project_id}/repo')
 async def delete_repo(project_id: str, db=Depends(get_db)):
@@ -56,7 +61,17 @@ async def delete_repo(project_id: str, db=Depends(get_db)):
         parts = p.github_url.replace('.git', '').split('/')
         if len(parts) >= 4:
             owner, repo = parts[-2], parts[-1]
-            async with httpx.AsyncClient() as client:
-                headers = {'Authorization': f'Bearer {tk}', 'Accept': 'application/vnd.github.v3+json', 'User-Agent': 'Nodara-Enterprise'}
-                await client.delete(f'https://api.github.com/repos/{owner}/{repo}', headers=headers)
+            try:
+                async with httpx.AsyncClient() as client:
+                    headers = {'Authorization': f'Bearer {tk}', 'Accept': 'application/vnd.github.v3+json', 'User-Agent': 'Nodara-Enterprise'}
+                    r = await client.delete(f'https://api.github.com/repos/{owner}/{repo}', headers=headers)
+                    if r.status_code == 204:
+                        db.add(EventoAuditoria(actor='GitOps', action='Repo Eliminado en GitHub', target=repo, severity='warning'))
+                    elif r.status_code != 404:
+                        error_msg = r.json().get('message', 'Error') if r.text else str(r.status_code)
+                        db.add(EventoAuditoria(actor='GitOps', action=f'No se pudo borrar Github: {error_msg}', target=repo, severity='danger'))
+                    await db.commit()
+            except Exception as e:
+                db.add(EventoAuditoria(actor='GitOps', action=f'Excepción borrando Github: {str(e)[:50]}', target=repo, severity='danger'))
+                await db.commit()
     return {'status': 'ok'}
