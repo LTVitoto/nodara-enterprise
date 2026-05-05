@@ -47,7 +47,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 )}
               >
                 <span>{item.label}</span>
-                <span className={cn("rounded-full px-2 py-0.5 text-[10px]", active ? "bg-brand-deep/15" : "bg-white/10")}>S{item.sprint}</span>
+                
               </Link>
             );
           })}
@@ -66,11 +66,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               <p className="text-xs font-black uppercase tracking-[0.24em] text-brand-cyan">Orquestador Multi-Agente</p>
               <p className="text-sm text-brand-muted">Sala enterprise para Gemini Infra y ChatGPT Fullstack.</p>
             </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <Badge tone="info">DATA_MODE={DATA_MODE}</Badge>
-              <Badge tone="success">Sprint 1 real</Badge>
-              <Badge tone="neutral">S2-S4 ready/mock</Badge>
-            </div>
+            
           </div>
         </header>
         <div className="vf-grid-bg min-h-[calc(100vh-80px)] p-5 md:p-8 xl:p-10">{children}</div>

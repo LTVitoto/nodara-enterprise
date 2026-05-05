@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 import logging
 
 from app.database import init_db
-from app.routers import projects, approvals, config, health, audit, metrics, tools, agents, websocket_chat
+from app.routers import projects, github, approvals, config, health, audit, metrics, tools, agents, websocket_chat
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(name)s | %(message)s")
 logger = logging.getLogger("orchestrator")
@@ -36,6 +36,8 @@ app.include_router(projects.router, prefix="/api/projects", tags=["Projects"])
 app.include_router(approvals.router, prefix="/api/approvals", tags=["Approvals"])
 app.include_router(config.router, prefix="/api/config", tags=["Config"])
 app.include_router(audit.router, prefix="/api/audit", tags=["Audit"])
+app.include_router(github.router, prefix="/api/github", tags=["Github"])
+app.include_router(github.router, prefix="/api/github", tags=["Github"])
 app.include_router(metrics.router, prefix="/api/metrics", tags=["Metrics"])
 app.include_router(tools.router, prefix="/api/tools", tags=["Tools"])
 app.include_router(agents.router, prefix="/api/agents", tags=["Agents"])

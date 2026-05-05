@@ -42,7 +42,7 @@ export const approvalsRepository = {
 };
 
 export const filesRepository = {
-  list: async (): Promise<UploadedFile[]> => [],
+  list: async (projectId: string): Promise<UploadedFile[]> => normalizeArray(await fetchFromAPI(`/api/files/${projectId}`)),
   upload: async (projectId: string, file: File): Promise<UploadedFile> => ({ 
     id: Date.now(), 
     proyecto_id: projectId, 
@@ -61,4 +61,11 @@ export const futureRepository = {
   agents: async (): Promise<AgentDefinition[]> => normalizeArray(await fetchFromAPI('/api/agents')),
   workspace: async (projectId: string): Promise<WorkspaceNode[]> => normalizeArray(await fetchFromAPI(`/api/projects/${projectId}/workspace/tree`)),
   audit: async (): Promise<AuditEvent[]> => normalizeArray(await fetchFromAPI('/api/audit/events'))
+};
+
+export const githubRepository = {
+  status: async (projectId: string) => await fetchFromAPI(`/api/github/${projectId}/status`, { method: 'POST' }),
+  add: async (projectId: string) => await fetchFromAPI(`/api/github/${projectId}/add`, { method: 'POST' }),
+  commit: async (projectId: string) => await fetchFromAPI(`/api/github/${projectId}/commit`, { method: 'POST' }),
+  push: async (projectId: string) => await fetchFromAPI(`/api/github/${projectId}/push`, { method: 'POST' }),
 };

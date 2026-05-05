@@ -37,6 +37,7 @@ export interface Proyecto {
   rol_chatgpt?: string | null;
   rol_claude?: string | null;
   estado: string;
+  responsable?: string | null;
   fecha_creacion?: string;
 }
 

@@ -1,37 +1,68 @@
 "use client";
-
 import Link from "next/link";
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { AgentBadge } from "@/components/ui/AgentBadge";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Card, CardTitle } from "@/components/ui/Card";
 import { SectionHeader } from "@/components/ui/SectionHeader";
-import { formatDate } from "@/lib/format";
-import { projectsRepository } from "@/services/repositories";
+import { formatDate, formatCurrency } from "@/lib/format";
+import { projectsRepository, futureRepository } from "@/services/repositories";
 import type { Proyecto } from "@/types/domain";
 
 export function ProjectDetailView({ projectId }: { projectId: string }) {
+  const router = useRouter();
   const [project, setProject] = useState<Proyecto | null>(null);
-  useEffect(() => { projectsRepository.get(projectId).then(setProject); }, [projectId]);
-  if (!project) return <SectionHeader title="Cargando proyecto..." description="Consultando backend o mock según configuración." />;
+  const [costoTotal, setCostoTotal] = useState<number>(0);
+
+  async function loadData() {
+      const p = await projectsRepository.get(projectId);
+      setProject(p);
+      const msgs = await futureRepository.messages(projectId);
+      setCostoTotal(msgs.reduce((acc, m) => acc + (m.costo_estimado || 0), 0));
+  }
+
+  useEffect(() => { loadData(); }, [projectId]);
+
+  async function toggleStatus() {
+      if(!project) return;
+      const newStatus = project.estado === 'activo' ? 'inactivo' : 'activo';
+      await fetch(`${process.env.NEXT_PUBLIC_API_BASE_URL}/api/projects/${projectId}`, {
+          method: 'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({estado: newStatus})
+      });
+      loadData();
+  }
+
+  async function deleteProject() {
+      if(!confirm("¿Estás seguro de eliminar este proyecto y todos sus archivos?")) return;
+      await fetch(`${process.env.NEXT_PUBLIC_API_BASE_URL}/api/projects/${projectId}`, { method: 'DELETE' });
+      router.push("/projects");
+  }
+
+  if (!project) return <SectionHeader title="Cargando proyecto..." description="Consultando backend..." />;
 
   return (
     <div>
       <SectionHeader
         title={project.titulo}
-        sprint="Sprint 1 · Detalle de proyecto"
         description={project.descripcion || "Sin descripción"}
-        action={<Link href={`/chat/${project.id}`}><Button>Abrir Chat</Button></Link>}
+        action={
+            <div className="flex gap-2">
+                <Button variant="danger" onClick={deleteProject}>Eliminar</Button>
+                <Button variant="secondary" onClick={toggleStatus}>{project.estado === 'activo' ? 'Desactivar' : 'Activar'}</Button>
+                <Link href={`/chat/${project.id}`}><Button>Abrir Chat</Button></Link>
+            </div>
+        }
       />
       <div className="grid gap-6 xl:grid-cols-[1.1fr_.9fr]">
         <Card>
           <CardTitle eyebrow={project.nombre_slug} title="Contrato del proyecto" />
           <div className="grid gap-4 md:grid-cols-2">
-            <div className="rounded-2xl bg-brand-soft p-4"><p className="text-xs font-black text-brand-muted">UUID</p><code className="text-sm font-bold">{project.id}</code></div>
-            <div className="rounded-2xl bg-brand-soft p-4"><p className="text-xs font-black text-brand-muted">Estado</p><Badge tone="success">{project.estado}</Badge></div>
-            <div className="rounded-2xl bg-brand-soft p-4"><p className="text-xs font-black text-brand-muted">Año</p><p className="font-black">{project.anio}</p></div>
-            <div className="rounded-2xl bg-brand-soft p-4"><p className="text-xs font-black text-brand-muted">Fecha creación</p><p className="font-bold">{formatDate(project.fecha_creacion)}</p></div>
+            <div className="rounded-2xl bg-brand-soft p-4"><p className="text-xs font-black text-brand-muted">Responsable</p><p className="font-black text-brand-navy">{(project as any).responsable || "Vitoto"}</p></div>
+            <div className="rounded-2xl bg-brand-soft p-4"><p className="text-xs font-black text-brand-muted">Costo Incurrido</p><Badge tone="warning" className="mt-1 text-sm">{formatCurrency(costoTotal)}</Badge></div>
+            <div className="rounded-2xl bg-brand-soft p-4"><p className="text-xs font-black text-brand-muted">Estado</p><Badge tone={project.estado === 'activo' ? "success" : "danger"} className="mt-1">{project.estado}</Badge></div>
+            <div className="rounded-2xl bg-brand-soft p-4"><p className="text-xs font-black text-brand-muted">GitHub</p><p className="font-bold text-sm truncate">{project.github_url || "No vinculado"}</p></div>
           </div>
           <pre className="mt-5 overflow-auto rounded-3xl bg-brand-deep p-5 text-xs leading-6 text-brand-bright">{JSON.stringify({ tecnologias: project.tecnologias, microservicios: project.microservicios }, null, 2)}</pre>
         </Card>

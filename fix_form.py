@@ -1,3 +1,14 @@
+import os
+
+print("🧹 LIMPIANDO FORMULARIO DE PROYECTOS...")
+
+def write_file(path, content):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(content.strip() + "\n")
+    print(f"✅ {path}")
+
+write_file("frontend/features/projects/ProjectForm.tsx", r"""
 "use client";
 
 import { useState } from "react";
@@ -89,3 +100,6 @@ export function ProjectForm() {
     </div>
   );
 }
+""")
+
+print("🚀 LISTO. Ve al navegador y recarga la página /projects/new.")
